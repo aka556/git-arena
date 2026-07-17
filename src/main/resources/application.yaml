@@ -1,0 +1,11 @@
+server:
+  port: 8096
+
+spring:
+  application:
+    name: git-arena
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/git_arena
+    username: postgres
+    password:
