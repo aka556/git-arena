@@ -8,4 +8,15 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/git_arena
     username: postgres
-    password:
+    password: 556AW334
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false   # 全新库从 V1 起建，无需 baseline
+
+# 采用数据库表主键递增策略
+mybatis-plus:
+  global-config:
+    db-config:
+      id-type: auto
