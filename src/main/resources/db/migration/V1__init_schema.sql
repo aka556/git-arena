@@ -1,0 +1,445 @@
+-- ============================================================================
+-- V1__init_schema.sql  ·  git-arena 基线 schema（database.md schema_version = 1）
+-- ----------------------------------------------------------------------------
+-- 方言：PostgreSQL 15+。本迁移仅建"元数据 / 指针"表——git 仓库真相在文件系统，
+-- 不在库（database.md §1 存储边界）。唯一涉 commit sha 的列 pr_comments.anchor_commit_sha
+-- 是"不可变历史标记"，非状态真相、非外键（§1 例外条款）。
+--
+-- 建表顺序按外键依赖排定；sandbox_repos ↔ rooms 为环形依赖，room_id 外键在 rooms
+-- 建好后用 ALTER 补上。
+-- ============================================================================
+
+-- gen_random_uuid()：PG13+ 内核已内置，此处显式声明扩展以对齐 database.md §0 约定。
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- updated_at 自动维护触发器函数（仅挂在含 updated_at 列的表上）。
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================================================
+-- §3.1 users — 用户（含 is_guest 游客）
+-- ============================================================================
+CREATE TABLE users (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    public_id       uuid        NOT NULL DEFAULT gen_random_uuid(),
+    username        varchar(32),
+    email           varchar(254),
+    password_hash   varchar(100),
+    display_name    varchar(64),
+    is_guest        boolean     NOT NULL DEFAULT false,
+    oauth_provider  varchar(32),
+    oauth_subject   varchar(191),
+    avatar_color    varchar(16),
+    total_points    int         NOT NULL DEFAULT 0,
+    status          varchar(16) NOT NULL DEFAULT 'active',
+    expires_at      timestamptz,                                  -- 仅游客：created_at + 24h
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT users_public_id_uq   UNIQUE (public_id),
+    CONSTRAINT users_status_chk      CHECK (status IN ('active','disabled')),
+    -- 允许连字符以容纳系统生成的游客名（guest-xxxx）；正式用户名亦可用。
+    CONSTRAINT users_username_chk    CHECK (username IS NULL OR username ~ '^[A-Za-z0-9_-]{1,32}$'),
+    CONSTRAINT users_avatar_chk      CHECK (avatar_color IS NULL OR avatar_color ~ '^#[0-9A-Fa-f]{6}$')
+);
+
+-- username / email 允许多个 NULL（游客）；PG 唯一索引视 NULL 互异，天然放行。
+CREATE UNIQUE INDEX users_username_uq   ON users (username);
+CREATE UNIQUE INDEX users_email_lower_uq ON users (lower(email));
+CREATE UNIQUE INDEX users_oauth_uq      ON users (oauth_provider, oauth_subject) WHERE oauth_provider IS NOT NULL;
+CREATE INDEX        users_expires_idx   ON users (expires_at) WHERE expires_at IS NOT NULL;  -- 游客清理扫描
+CREATE INDEX        users_points_idx    ON users (total_points DESC);                        -- §5.3 总榜
+
+CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- §3.3 levels — 关卡蓝图（spec 契约见 docs/level-spec.md）
+-- ============================================================================
+CREATE TABLE levels (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    public_id       uuid        NOT NULL DEFAULT gen_random_uuid(),
+    slug            varchar(64) NOT NULL,
+    title           varchar(128) NOT NULL,
+    description     text,
+    category        varchar(32) NOT NULL,
+    difficulty      smallint    NOT NULL,
+    order_index     int,
+    mode            varchar(16) NOT NULL DEFAULT 'solo',
+    initial_spec    jsonb       NOT NULL,                          -- 裸对象，版本由 schema_version 承载
+    goal_spec       jsonb       NOT NULL,
+    solution_spec   jsonb,
+    author_user_id  bigint,
+    visibility      varchar(16) NOT NULL DEFAULT 'public',
+    status          varchar(16) NOT NULL DEFAULT 'draft',
+    schema_version  smallint    NOT NULL DEFAULT 1,
+    deleted_at      timestamptz,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT levels_public_id_uq  UNIQUE (public_id),
+    CONSTRAINT levels_category_chk   CHECK (category IN ('basics','branching','merge','rebase','remote','conflict','pr')),
+    CONSTRAINT levels_difficulty_chk CHECK (difficulty BETWEEN 1 AND 5),
+    CONSTRAINT levels_mode_chk       CHECK (mode IN ('solo','collab')),
+    CONSTRAINT levels_visibility_chk CHECK (visibility IN ('public','unlisted','private')),
+    CONSTRAINT levels_status_chk     CHECK (status IN ('draft','published','archived')),
+    CONSTRAINT levels_author_fk      FOREIGN KEY (author_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- slug 唯一按"未软删"计，软删草稿释放其 slug 供复用。
+CREATE UNIQUE INDEX levels_slug_uq            ON levels (slug) WHERE deleted_at IS NULL;
+CREATE INDEX        levels_category_order_idx ON levels (category, order_index);
+CREATE INDEX        levels_status_vis_idx     ON levels (status, visibility);
+CREATE INDEX        levels_author_idx         ON levels (author_user_id);
+
+CREATE TRIGGER levels_set_updated_at BEFORE UPDATE ON levels
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- §3.2 sandbox_repos — 沙盒仓库指针（不是仓库内容！room_id 外键见文末 ALTER）
+-- ============================================================================
+CREATE TABLE sandbox_repos (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sandbox_key     varchar(128) NOT NULL,                        -- 相对 key，非绝对路径（§7 越权防护）
+    owner_user_id   bigint      NOT NULL,
+    repo_kind       varchar(24) NOT NULL,
+    level_id        bigint,
+    room_id         bigint,
+    status          varchar(16) NOT NULL DEFAULT 'active',
+    size_bytes      bigint      NOT NULL DEFAULT 0,
+    commit_count    int         NOT NULL DEFAULT 0,               -- 仅配额统计，不是 DAG 真相
+    last_active_at  timestamptz,
+    expires_at      timestamptz,
+    cleaned_at      timestamptz,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT sandbox_repos_key_uq   UNIQUE (sandbox_key),
+    CONSTRAINT sandbox_repos_kind_chk  CHECK (repo_kind IN ('personal','level_attempt','room_origin','room_clone')),
+    CONSTRAINT sandbox_repos_status_chk CHECK (status IN ('active','idle','cleaning','cleaned')),
+    CONSTRAINT sandbox_repos_owner_fk  FOREIGN KEY (owner_user_id) REFERENCES users(id)  ON DELETE CASCADE,
+    CONSTRAINT sandbox_repos_level_fk  FOREIGN KEY (level_id)      REFERENCES levels(id) ON DELETE SET NULL
+);
+
+CREATE INDEX sandbox_repos_owner_idx  ON sandbox_repos (owner_user_id);
+CREATE INDEX sandbox_repos_room_idx   ON sandbox_repos (room_id);
+CREATE INDEX sandbox_repos_gc_idx     ON sandbox_repos (status, expires_at);  -- 清理/空闲回收扫描
+
+CREATE TRIGGER sandbox_repos_set_updated_at BEFORE UPDATE ON sandbox_repos
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+COMMENT ON TABLE  sandbox_repos             IS '沙盒仓库生命周期台账与配额。仓库真相在文件系统，此处仅存指针（database.md §1）。';
+COMMENT ON COLUMN sandbox_repos.sandbox_key IS '相对沙盒根的逻辑 key，真实路径由后端拼装并规范化校验，禁绝对路径。';
+COMMENT ON COLUMN sandbox_repos.commit_count IS '配额监控用途；非 DAG 真相，不可当状态读。';
+
+
+-- ============================================================================
+-- §4.1 rooms — 协作房间
+-- ============================================================================
+CREATE TABLE rooms (
+    id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    public_id         uuid        NOT NULL DEFAULT gen_random_uuid(),
+    join_code         varchar(12) NOT NULL,
+    name              varchar(64) NOT NULL,
+    owner_user_id     bigint,
+    origin_sandbox_id bigint,
+    scenario_level_id bigint,
+    status            varchar(16) NOT NULL DEFAULT 'open',
+    max_members       smallint    NOT NULL DEFAULT 8,
+    deleted_at        timestamptz,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT rooms_public_id_uq     UNIQUE (public_id),
+    CONSTRAINT rooms_status_chk        CHECK (status IN ('open','locked','archived')),
+    CONSTRAINT rooms_max_members_chk   CHECK (max_members BETWEEN 2 AND 50),
+    CONSTRAINT rooms_owner_fk          FOREIGN KEY (owner_user_id)     REFERENCES users(id)         ON DELETE SET NULL,
+    CONSTRAINT rooms_origin_sandbox_fk FOREIGN KEY (origin_sandbox_id) REFERENCES sandbox_repos(id) ON DELETE SET NULL,
+    CONSTRAINT rooms_scenario_level_fk FOREIGN KEY (scenario_level_id) REFERENCES levels(id)        ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX rooms_join_code_uq ON rooms (join_code) WHERE deleted_at IS NULL;  -- 归档房号可复用
+CREATE INDEX        rooms_owner_idx    ON rooms (owner_user_id);
+CREATE INDEX        rooms_status_idx   ON rooms (status);
+
+CREATE TRIGGER rooms_set_updated_at BEFORE UPDATE ON rooms
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 解开 sandbox_repos ↔ rooms 环形依赖：房间消亡时其内仓库指针随之 CASCADE。
+ALTER TABLE sandbox_repos
+    ADD CONSTRAINT sandbox_repos_room_fk FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE;
+
+
+-- ============================================================================
+-- §3.4 user_level_progress — 关卡进度
+-- ============================================================================
+CREATE TABLE user_level_progress (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id             bigint      NOT NULL,
+    level_id            bigint      NOT NULL,
+    status              varchar(16) NOT NULL DEFAULT 'unlocked',
+    attempts            int         NOT NULL DEFAULT 0,
+    best_command_count  int,
+    star_rating         smallint    NOT NULL DEFAULT 0,
+    hints_used          int         NOT NULL DEFAULT 0,
+    first_completed_at  timestamptz,
+    last_attempt_at     timestamptz,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT ulp_status_chk    CHECK (status IN ('locked','unlocked','in_progress','completed')),
+    CONSTRAINT ulp_star_chk      CHECK (star_rating BETWEEN 0 AND 3),
+    CONSTRAINT ulp_user_fk       FOREIGN KEY (user_id)  REFERENCES users(id)  ON DELETE CASCADE,
+    CONSTRAINT ulp_level_fk      FOREIGN KEY (level_id) REFERENCES levels(id) ON DELETE CASCADE,
+    CONSTRAINT ulp_user_level_uq UNIQUE (user_id, level_id)
+);
+
+CREATE INDEX ulp_user_status_idx ON user_level_progress (user_id, status);  -- "我的进度"
+CREATE INDEX ulp_level_idx       ON user_level_progress (level_id);         -- 关卡完成率
+
+CREATE TRIGGER ulp_set_updated_at BEFORE UPDATE ON user_level_progress
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- §4.2 room_members — 房间成员（含 §6.3 化身层身份/配色）
+-- ============================================================================
+CREATE TABLE room_members (
+    id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    room_id          bigint      NOT NULL,
+    user_id          bigint      NOT NULL,
+    role             varchar(16) NOT NULL DEFAULT 'contributor',
+    local_sandbox_id bigint,
+    avatar_color     varchar(16),
+    avatar_label     varchar(32),
+    last_seen_at     timestamptz,
+    joined_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT room_members_role_chk    CHECK (role IN ('owner','maintainer','contributor','observer')),
+    CONSTRAINT room_members_avatar_chk  CHECK (avatar_color IS NULL OR avatar_color ~ '^#[0-9A-Fa-f]{6}$'),
+    CONSTRAINT room_members_room_fk     FOREIGN KEY (room_id)          REFERENCES rooms(id)         ON DELETE CASCADE,
+    CONSTRAINT room_members_user_fk     FOREIGN KEY (user_id)          REFERENCES users(id)         ON DELETE CASCADE,
+    CONSTRAINT room_members_sandbox_fk  FOREIGN KEY (local_sandbox_id) REFERENCES sandbox_repos(id) ON DELETE SET NULL,
+    CONSTRAINT room_members_room_user_uq UNIQUE (room_id, user_id)
+);
+
+-- (room_id, user_id) 唯一索引已覆盖 room_id 前缀查询；仅补 user_id 反查。
+CREATE INDEX room_members_user_idx ON room_members (user_id);
+
+
+-- ============================================================================
+-- §4.3 pull_requests — PR 流程（number 为房内自增，由应用在事务内分配）
+-- ============================================================================
+CREATE TABLE pull_requests (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    room_id             bigint       NOT NULL,
+    number              int          NOT NULL,
+    title               varchar(200) NOT NULL,
+    description         text,
+    author_member_id    bigint,
+    source_branch       varchar(255) NOT NULL,                    -- 分支名（指针），非 hash
+    target_branch       varchar(255) NOT NULL,
+    status              varchar(16)  NOT NULL DEFAULT 'open',
+    mergeable           varchar(16)  NOT NULL DEFAULT 'unknown',
+    merged_by_member_id bigint,
+    merged_at           timestamptz,
+    closed_at           timestamptz,
+    created_at          timestamptz  NOT NULL DEFAULT now(),
+    updated_at          timestamptz  NOT NULL DEFAULT now(),
+    CONSTRAINT pr_status_chk     CHECK (status IN ('open','merged','closed')),
+    CONSTRAINT pr_mergeable_chk  CHECK (mergeable IN ('unknown','clean','conflict')),
+    CONSTRAINT pr_room_fk        FOREIGN KEY (room_id)             REFERENCES rooms(id)        ON DELETE CASCADE,
+    CONSTRAINT pr_author_fk      FOREIGN KEY (author_member_id)    REFERENCES room_members(id) ON DELETE SET NULL,
+    CONSTRAINT pr_merged_by_fk   FOREIGN KEY (merged_by_member_id) REFERENCES room_members(id) ON DELETE SET NULL,
+    CONSTRAINT pr_room_number_uq UNIQUE (room_id, number)
+);
+
+CREATE INDEX pr_room_status_idx ON pull_requests (room_id, status);
+CREATE INDEX pr_author_idx      ON pull_requests (author_member_id);
+
+CREATE TRIGGER pr_set_updated_at BEFORE UPDATE ON pull_requests
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- §4.4 pr_reviews — PR 评审
+-- ============================================================================
+CREATE TABLE pr_reviews (
+    id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pull_request_id    bigint      NOT NULL,
+    reviewer_member_id bigint,
+    state              varchar(20) NOT NULL,
+    body               text,
+    submitted_at       timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pr_reviews_state_chk    CHECK (state IN ('approved','changes_requested','commented')),
+    CONSTRAINT pr_reviews_pr_fk        FOREIGN KEY (pull_request_id)    REFERENCES pull_requests(id) ON DELETE CASCADE,
+    CONSTRAINT pr_reviews_reviewer_fk  FOREIGN KEY (reviewer_member_id) REFERENCES room_members(id)  ON DELETE SET NULL
+);
+
+CREATE INDEX pr_reviews_pr_idx          ON pr_reviews (pull_request_id);
+CREATE INDEX pr_reviews_pr_reviewer_idx ON pr_reviews (pull_request_id, reviewer_member_id);
+
+
+-- ============================================================================
+-- §4.5 pr_comments — PR 评论（含行级评论，稳健 diff 锚点）
+-- ============================================================================
+CREATE TABLE pr_comments (
+    id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pull_request_id   bigint       NOT NULL,
+    review_id         bigint,
+    author_member_id  bigint,
+    body              text         NOT NULL,
+    comment_kind      varchar(12)  NOT NULL DEFAULT 'general',
+    anchor_commit_sha varchar(40),                                -- 不可变历史标记（§1 例外），非外键
+    file_path         varchar(1024),
+    diff_side         varchar(8),
+    original_line     int,
+    diff_hunk         text,
+    current_line      int,                                        -- 后端按当前 HEAD 重算
+    is_outdated       boolean      NOT NULL DEFAULT false,
+    created_at        timestamptz  NOT NULL DEFAULT now(),
+    updated_at        timestamptz  NOT NULL DEFAULT now(),
+    CONSTRAINT pr_comments_kind_chk CHECK (comment_kind IN ('general','inline')),
+    CONSTRAINT pr_comments_side_chk CHECK (diff_side IS NULL OR diff_side IN ('old','new')),
+    -- 行级评论必须带齐锚点事实；整体评论则不带锚点列。
+    CONSTRAINT pr_comments_inline_chk CHECK (
+        comment_kind = 'general'
+        OR (anchor_commit_sha IS NOT NULL AND file_path IS NOT NULL
+            AND diff_side IS NOT NULL AND original_line IS NOT NULL)
+    ),
+    CONSTRAINT pr_comments_pr_fk     FOREIGN KEY (pull_request_id)  REFERENCES pull_requests(id) ON DELETE CASCADE,
+    CONSTRAINT pr_comments_review_fk FOREIGN KEY (review_id)        REFERENCES pr_reviews(id)    ON DELETE SET NULL,
+    CONSTRAINT pr_comments_author_fk FOREIGN KEY (author_member_id) REFERENCES room_members(id)  ON DELETE SET NULL
+);
+
+CREATE INDEX pr_comments_pr_idx     ON pr_comments (pull_request_id);
+CREATE INDEX pr_comments_review_idx ON pr_comments (review_id);
+CREATE INDEX pr_comments_inline_idx ON pr_comments (pull_request_id, file_path) WHERE comment_kind = 'inline';
+
+CREATE TRIGGER pr_comments_set_updated_at BEFORE UPDATE ON pr_comments
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+COMMENT ON COLUMN pr_comments.anchor_commit_sha IS
+    '写评论时源分支 HEAD 的 sha，记录"针对哪个版本的 diff"。不可变历史标记，永不当当前状态读、非外键（database.md §1 例外条款）。';
+
+
+-- ============================================================================
+-- §5.1 achievements — 成就定义
+-- ============================================================================
+CREATE TABLE achievements (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code         varchar(64) NOT NULL,
+    name         varchar(64) NOT NULL,
+    description  text,
+    icon         varchar(64),
+    points       int         NOT NULL DEFAULT 0,
+    category     varchar(32),
+    criteria     jsonb,
+    is_active    boolean     NOT NULL DEFAULT true,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT achievements_code_uq     UNIQUE (code),
+    CONSTRAINT achievements_category_chk CHECK (category IS NULL OR category IN ('solo','collab','special'))
+);
+
+CREATE TRIGGER achievements_set_updated_at BEFORE UPDATE ON achievements
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+-- §5.2 user_achievements — 用户成就解锁
+-- ============================================================================
+CREATE TABLE user_achievements (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id        bigint      NOT NULL,
+    achievement_id bigint      NOT NULL,
+    unlocked_at    timestamptz NOT NULL DEFAULT now(),
+    context        jsonb,
+    CONSTRAINT user_achievements_user_fk FOREIGN KEY (user_id)        REFERENCES users(id)        ON DELETE CASCADE,
+    CONSTRAINT user_achievements_ach_fk  FOREIGN KEY (achievement_id) REFERENCES achievements(id) ON DELETE CASCADE,
+    CONSTRAINT user_achievements_uq      UNIQUE (user_id, achievement_id)
+);
+-- (user_id, achievement_id) 唯一索引已覆盖 user_id 前缀查询，无需另建。
+
+
+-- ============================================================================
+-- §5.3 score_events — 积分流水（只增不改；users.total_points 为其聚合缓存）
+-- ============================================================================
+CREATE TABLE score_events (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id      bigint      NOT NULL,
+    source_type  varchar(24) NOT NULL,
+    source_ref   varchar(64),
+    points       int         NOT NULL,                            -- 可正可负（提示惩罚为负）
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT score_events_source_chk CHECK (source_type IN ('level_complete','achievement','pr_merged','hint_penalty','manual')),
+    CONSTRAINT score_events_user_fk    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX score_events_user_time_idx ON score_events (user_id, created_at);
+CREATE INDEX score_events_source_idx    ON score_events (source_type);
+
+
+-- ============================================================================
+-- §5.4 level_hints — 分级提示
+-- ============================================================================
+CREATE TABLE level_hints (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    level_id     bigint      NOT NULL,
+    order_index  int         NOT NULL,
+    tier         smallint    NOT NULL,
+    body         text        NOT NULL,
+    cost_points  int         NOT NULL DEFAULT 0,
+    CONSTRAINT level_hints_tier_chk       CHECK (tier BETWEEN 1 AND 5),
+    CONSTRAINT level_hints_level_fk       FOREIGN KEY (level_id) REFERENCES levels(id) ON DELETE CASCADE,
+    CONSTRAINT level_hints_level_order_uq UNIQUE (level_id, order_index)
+);
+-- (level_id, order_index) 唯一索引已覆盖 level_id 前缀查询。
+
+
+-- ============================================================================
+-- §5.5 user_hint_usage — 提示使用记录
+-- ============================================================================
+CREATE TABLE user_hint_usage (
+    id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id   bigint      NOT NULL,
+    level_id  bigint      NOT NULL,
+    hint_id   bigint      NOT NULL,
+    used_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT uhu_user_fk      FOREIGN KEY (user_id)  REFERENCES users(id)       ON DELETE CASCADE,
+    CONSTRAINT uhu_level_fk     FOREIGN KEY (level_id) REFERENCES levels(id)      ON DELETE CASCADE,
+    CONSTRAINT uhu_hint_fk      FOREIGN KEY (hint_id)  REFERENCES level_hints(id) ON DELETE CASCADE,
+    CONSTRAINT uhu_user_hint_uq UNIQUE (user_id, hint_id)         -- 同一提示只计一次惩罚
+);
+
+CREATE INDEX uhu_user_level_idx ON user_hint_usage (user_id, level_id);
+
+
+-- ============================================================================
+-- §5.6 command_logs — 命令审计 / 教学分析（可选表，非仓库真相、不承担限流）
+-- 数据量大：后续可改造为按 created_at 声明式分区并设保留期（届时升 schema_version）。
+-- ============================================================================
+CREATE TABLE command_logs (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id        bigint,
+    sandbox_id     bigint,
+    room_id        bigint,
+    raw_input      text,                                          -- 仅记录，绝不据此执行
+    parsed_command varchar(32),
+    allowed        boolean     NOT NULL,
+    success        boolean,
+    stderr_excerpt varchar(500),
+    duration_ms    int,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT command_logs_user_fk    FOREIGN KEY (user_id)    REFERENCES users(id)         ON DELETE SET NULL,
+    CONSTRAINT command_logs_sandbox_fk FOREIGN KEY (sandbox_id) REFERENCES sandbox_repos(id) ON DELETE SET NULL,
+    CONSTRAINT command_logs_room_fk    FOREIGN KEY (room_id)    REFERENCES rooms(id)         ON DELETE SET NULL
+);
+
+CREATE INDEX command_logs_user_time_idx ON command_logs (user_id, created_at);
+CREATE INDEX command_logs_command_idx   ON command_logs (parsed_command);
+CREATE INDEX command_logs_denied_idx    ON command_logs (created_at) WHERE allowed = false;  -- 安全审计快查
+
+COMMENT ON TABLE command_logs IS
+    '命令审计/教学分析（可选）。真相在文件系统、限流在 Redis；raw_input 仅记录不执行（database.md §5.6 / §7）。';
