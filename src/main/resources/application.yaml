@@ -6,9 +6,10 @@ spring:
     name: git-arena
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/git_arena
+    url: jdbc:postgresql://localhost:5432/git-arena
     username: postgres
     password: 556AW334
+    driver-class-name: org.postgresql.Driver
 
   flyway:
     enabled: true
