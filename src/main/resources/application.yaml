@@ -16,6 +16,25 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: false   # 全新库从 V1 起建，无需 baseline
 
+  mail:
+    host: smtp.qq.com
+    port: 587
+    username: ${email.username:}
+    password: ${email.password:}
+    default-encoding: UTF-8
+
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connection timeout: 5000
+          timeout: 5000
+          write timeout: 5000
+
+
 # 采用数据库表主键递增策略
 mybatis-plus:
   global-config:
