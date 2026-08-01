@@ -1,0 +1,37 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "first-commit",
+    "title": "第一次提交",
+    "description": "工作区已有 hello.txt。把它提交到 main 分支，完成你的第一个 commit。",
+    "category": "basics",
+    "difficulty": 1,
+    "mode": "solo",
+    "orderIndex": 1
+  },
+  "initial": {
+    "commits": [],
+    "branches": [],
+    "head": { "type": "branch", "ref": "main" },
+    "workingDir": { "files": { "hello.txt": "hi\n" }, "staged": [] }
+  },
+  "goal": {
+    "graph": {
+      "commits": [ { "seq": "C1", "parents": [] } ],
+      "branches": [ { "name": "main", "target": "C1" } ],
+      "head": { "type": "branch", "ref": "main" }
+    },
+    "match": { "compareWorkingDir": true }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git add hello.txt" },
+      { "run": "git commit -m \"init\"" }
+    ],
+    "notes": "git add 暂存文件，git commit -m 完成提交。"
+  },
+  "hints": [
+    { "tier": 1, "body": "文件要先进暂存区：git add hello.txt", "costPoints": 0 },
+    { "tier": 2, "body": "再用 git commit -m \"信息\" 提交", "costPoints": 0 }
+  ]
+}

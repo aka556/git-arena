@@ -1,0 +1,48 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "rebase-branch",
+    "title": "变基到主干",
+    "description": "main 和 feature 从 C1 分叉：main 有 C2，feature 有 C3。站在 feature 上把它变基到 main，让历史变成一条直线（C3 被嫁接到 C2 之后，成为新的提交）。",
+    "category": "rebase",
+    "difficulty": 3,
+    "mode": "solo",
+    "orderIndex": 1
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "a.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "main work", "files": { "m.txt": "main\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "feature work", "files": { "f.txt": "feature\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "feature" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C2" },
+        { "name": "feature", "target": "C3" }
+      ],
+      "head": { "type": "branch", "ref": "feature" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git rebase main" }
+    ],
+    "notes": "变基后 feature 的提交换了父（现在接在 C2 后面），main 不动。历史从分叉变成直线。"
+  },
+  "hints": [
+    { "tier": 1, "body": "在 feature 上执行 git rebase main", "costPoints": 0 },
+    { "tier": 2, "body": "变基不是合并：它复制提交并改父，main 指针保持不动", "costPoints": 5 }
+  ]
+}

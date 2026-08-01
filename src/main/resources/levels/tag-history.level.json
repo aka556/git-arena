@@ -1,0 +1,43 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "tag-history",
+    "title": "给历史打标签",
+    "description": "main 上有 C1 → C2 → C3。给中间的 C2 打一个轻量标签 v1.0。标签不改变图结构，只是给某个提交起个名字。",
+    "category": "basics",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 5
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "c1", "files": { "a.txt": "1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "c2", "files": { "a.txt": "2\n" } },
+      { "seq": "C3", "parents": ["C2"], "message": "c3", "files": { "a.txt": "3\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C3" } ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [ { "name": "main", "target": "C3" } ],
+      "tags": [ { "name": "v1.0", "target": "C2" } ],
+      "head": { "type": "branch", "ref": "main" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git tag v1.0 HEAD~1" }
+    ],
+    "notes": "HEAD~1 就是 C2。git tag <名> <提交> 在指定提交上打标签，不影响任何分支。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git tag 后面可以跟一个提交，指定打在哪里", "costPoints": 0 },
+    { "tier": 2, "body": "C2 是 HEAD 的上一个提交：HEAD~1", "costPoints": 5 }
+  ]
+}

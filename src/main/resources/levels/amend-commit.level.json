@@ -1,0 +1,41 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "amend-commit",
+    "title": "修正上一次提交",
+    "description": "已经提交了 hello.txt，但内容写错了。工作区已改好，用 --amend 修正上一次提交，而不是新建一个提交。",
+    "category": "basics",
+    "difficulty": 1,
+    "mode": "solo",
+    "orderIndex": 2
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "add greeting", "files": { "hello.txt": "hello\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C1" } ],
+    "head": { "type": "branch", "ref": "main" },
+    "workingDir": { "files": { "hello.txt": "hello world\n" }, "staged": [] }
+  },
+  "goal": {
+    "graph": {
+      "commits": [ { "seq": "C1", "parents": [] } ],
+      "branches": [ { "name": "main", "target": "C1" } ],
+      "head": { "type": "branch", "ref": "main" }
+    },
+    "assertions": [
+      { "type": "fileAtHeadContains", "path": "hello.txt", "pattern": "hello world" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git add hello.txt" },
+      { "run": "git commit --amend -m \"add greeting\"" }
+    ],
+    "notes": "关键：目标只有一个提交。若新建提交会变成两个，通不过——必须 --amend。"
+  },
+  "hints": [
+    { "tier": 1, "body": "先把改动加入暂存区：git add hello.txt", "costPoints": 0 },
+    { "tier": 2, "body": "用 git commit --amend 改写上一次提交，而不是 git commit 新建", "costPoints": 5 }
+  ]
+}

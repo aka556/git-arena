@@ -1,0 +1,57 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "squash-merge",
+    "title": "压缩合并",
+    "description": "feature 上有两个提交（C3、C4）。用 squash 合并把它们压成主干上的一个普通提交，保持 main 历史整洁。",
+    "category": "merge",
+    "difficulty": 3,
+    "mode": "solo",
+    "orderIndex": 2
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "base.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "main work", "files": { "m.txt": "main\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "feature 1", "files": { "b.txt": "b\n" } },
+      { "seq": "C4", "parents": ["C3"], "message": "feature 2", "files": { "c.txt": "c\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "feature", "target": "C4" }
+    ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C1"] },
+        { "seq": "C4", "parents": ["C3"] },
+        { "seq": "C5", "parents": ["C2"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C5" },
+        { "name": "feature", "target": "C4" }
+      ],
+      "head": { "type": "branch", "ref": "main" }
+    },
+    "assertions": [
+      { "type": "fileAtHeadContains", "path": "b.txt", "pattern": "b" },
+      { "type": "fileAtHeadContains", "path": "c.txt", "pattern": "c" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git merge --squash feature" },
+      { "run": "git add ." },
+      { "run": "git commit -m \"squash feature\"" }
+    ],
+    "notes": "squash 把 feature 的改动一次性暂存，再由你 commit 成单亲提交 C5——注意 C5 只有一个父（C2），不是合并提交。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git merge --squash feature 只暂存改动，不自动提交", "costPoints": 0 },
+    { "tier": 2, "body": "随后 git add . 再 git commit 完成，生成一个普通提交", "costPoints": 5 }
+  ]
+}

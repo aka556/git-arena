@@ -1,0 +1,49 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "merge-feature",
+    "title": "合并 feature 分支",
+    "description": "main 与 feature 从 C1 分叉。站在 main 上把 feature 合并进来，产生一个合并提交。",
+    "category": "merge",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 1
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "app.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "main work", "files": { "main.txt": "main\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "feature work", "files": { "feature.txt": "feature\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C1"] },
+        { "seq": "C4", "parents": ["C2", "C3"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C4" },
+        { "name": "feature", "target": "C3" }
+      ],
+      "head": { "type": "branch", "ref": "main" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git merge feature" }
+    ],
+    "notes": "两侧改动互不冲突，merge 直接产生合并提交。注意首父方向：站在 main 上合并。"
+  },
+  "hints": [
+    { "tier": 1, "body": "先确认自己站在 main 上（git status）", "costPoints": 0 },
+    { "tier": 2, "body": "git merge feature 会创建一个有两个父提交的合并节点", "costPoints": 0 }
+  ]
+}

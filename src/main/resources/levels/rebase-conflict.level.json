@@ -1,0 +1,55 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "rebase-conflict",
+    "title": "变基中的冲突",
+    "description": "main 和 feature 都改了 a.txt 的同一处。站在 feature 上变基到 main，变基会停在冲突处；解决后 git add，再 git rebase --continue 完成。",
+    "category": "rebase",
+    "difficulty": 4,
+    "mode": "solo",
+    "orderIndex": 2
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "a.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "main edit", "files": { "a.txt": "main change\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "feature edit", "files": { "a.txt": "feature change\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "feature" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C2" },
+        { "name": "feature", "target": "C3" }
+      ],
+      "head": { "type": "branch", "ref": "feature" }
+    },
+    "assertions": [
+      { "type": "fileAtHeadNotContains", "path": "a.txt", "pattern": "<<<<<<<" },
+      { "type": "fileAtHeadContains", "path": "a.txt", "pattern": "feature change" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git rebase main" },
+      { "writeFile": { "path": "a.txt", "content": "main change\nfeature change\n" } },
+      { "run": "git add a.txt" },
+      { "run": "git rebase --continue" }
+    ],
+    "notes": "rebase 停在冲突时，编辑 a.txt 去掉冲突标记，git add 标记已解决，再 git rebase --continue。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git rebase main 会停在冲突处", "costPoints": 0 },
+    { "tier": 2, "body": "解决冲突文件后 git add，再 git rebase --continue（放弃则 --abort）", "costPoints": 5 }
+  ]
+}

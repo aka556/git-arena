@@ -1,0 +1,42 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "detached-head-basics",
+    "title": "分离头指针",
+    "description": "main 上有 C1 → C2 → C3。把 HEAD 移到历史中的 C1（不是分支，而是具体某个快照），进入 detached HEAD 状态。",
+    "category": "basics",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 4
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "c1", "files": { "a.txt": "1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "c2", "files": { "a.txt": "2\n" } },
+      { "seq": "C3", "parents": ["C2"], "message": "c3", "files": { "a.txt": "3\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C3" } ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [ { "name": "main", "target": "C3" } ],
+      "head": { "type": "detached", "ref": "C1" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git checkout HEAD~2" }
+    ],
+    "notes": "HEAD~2 表示从 HEAD 沿首父回退两步，正好落在 C1。图形界面里也可直接用 C1 的短 hash。"
+  },
+  "hints": [
+    { "tier": 1, "body": "checkout 一个具体提交（而不是分支名）会进入 detached HEAD", "costPoints": 0 },
+    { "tier": 2, "body": "用 git checkout HEAD~2 回退到两步之前的提交", "costPoints": 5 }
+  ]
+}

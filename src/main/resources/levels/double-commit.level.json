@@ -1,0 +1,43 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "double-commit",
+    "title": "连续两次提交",
+    "description": "工作区有 a.txt。提交它，然后再改动并提交第二次，形成 C1 → C2 的线性历史。",
+    "category": "basics",
+    "difficulty": 1,
+    "mode": "solo",
+    "orderIndex": 3
+  },
+  "initial": {
+    "commits": [],
+    "branches": [],
+    "head": { "type": "branch", "ref": "main" },
+    "workingDir": { "files": { "a.txt": "one\n" }, "staged": [] }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] }
+      ],
+      "branches": [ { "name": "main", "target": "C2" } ],
+      "head": { "type": "branch", "ref": "main" }
+    },
+    "match": { "compareWorkingDir": true }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git add a.txt" },
+      { "run": "git commit -m \"first\"" },
+      { "run": "echo two > b.txt" },
+      { "run": "git add b.txt" },
+      { "run": "git commit -m \"second\"" }
+    ],
+    "notes": "提交两次，git log 能看到两条历史。工作区结束时要干净。"
+  },
+  "hints": [
+    { "tier": 1, "body": "每次提交都是 add 再 commit", "costPoints": 0 },
+    { "tier": 2, "body": "第二次提交前先制造一点改动（新建或修改文件）", "costPoints": 0 }
+  ]
+}

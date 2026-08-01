@@ -1,0 +1,52 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "branch-divergence",
+    "title": "分叉发展",
+    "description": "main 和 feature 都从 C1 出发，HEAD 在 feature。分别在两个分支上各提交一次，制造分叉：main → 一个新提交，feature → 另一个新提交，最后停在 main。",
+    "category": "branching",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 3
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "a.txt": "base\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C1" },
+      { "name": "feature", "target": "C1" }
+    ],
+    "head": { "type": "branch", "ref": "feature" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C1"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C2" },
+        { "name": "feature", "target": "C3" }
+      ],
+      "head": { "type": "branch", "ref": "main" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "echo feature > f.txt" },
+      { "run": "git add f.txt" },
+      { "run": "git commit -m \"feature work\"" },
+      { "run": "git switch main" },
+      { "run": "echo main > m.txt" },
+      { "run": "git add m.txt" },
+      { "run": "git commit -m \"main work\"" }
+    ],
+    "notes": "先在 feature 上提交，再切回 main 提交。两个提交的父都是 C1，图上出现分叉。"
+  },
+  "hints": [
+    { "tier": 1, "body": "在当前分支（feature）先提交一次", "costPoints": 0 },
+    { "tier": 2, "body": "git switch main 切回主干再提交一次", "costPoints": 5 }
+  ]
+}

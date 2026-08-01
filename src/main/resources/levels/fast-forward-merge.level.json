@@ -1,0 +1,48 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "fast-forward-merge",
+    "title": "快进合并",
+    "description": "main 停在 C1，feature 在它前面领先了两个提交（C2、C3）。在 main 上合并 feature——因为 main 是 feature 的祖先，会直接快进，不产生合并提交。",
+    "category": "branching",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 4
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "c1", "files": { "a.txt": "1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "c2", "files": { "b.txt": "2\n" } },
+      { "seq": "C3", "parents": ["C2"], "message": "c3", "files": { "c.txt": "3\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C1" },
+      { "name": "feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C3" },
+        { "name": "feature", "target": "C3" }
+      ],
+      "head": { "type": "branch", "ref": "main" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git merge feature" }
+    ],
+    "notes": "快进合并只是把 main 指针前移到 C3，历史仍是一条直线，没有多出合并提交。"
+  },
+  "hints": [
+    { "tier": 1, "body": "确认自己在 main 上，然后 git merge feature", "costPoints": 0 },
+    { "tier": 2, "body": "main 是 feature 的祖先 → 合并是 fast-forward，图不分叉", "costPoints": 0 }
+  ]
+}
