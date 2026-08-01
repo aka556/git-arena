@@ -217,6 +217,28 @@ class GraphMapperTest {
                 .containsExactlyInAnyOrder("main", "feature");
     }
 
+    @Test
+    void mergeViaCommandChainProducesTwoParentNode() {
+        // 走 M2 executor 命令链路（checkout -b / merge），验证合并提交经 mapper 读出双父
+        git("init");
+        commitFile("shared.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitFile("f.txt", "feat", "fc");
+        git("checkout", "main");
+        commitFile("m.txt", "main", "mc");
+        git("merge", "feature");
+
+        GitGraph graph = mapper.map(sandbox);
+        assertThat(graph.commits()).hasSize(4);
+
+        GitGraph.CommitNode merge = graph.commits().get(0); // 合并提交最新
+        assertThat(merge.parents()).hasSize(2);
+        assertThat(graph.branches()).extracting(GitGraph.BranchRef::name)
+                .contains("main", "feature");
+        assertThat(graph.head().type()).isEqualTo("branch");
+        assertThat(graph.head().ref()).isEqualTo("main");
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private void git(String sub, String... args) {
