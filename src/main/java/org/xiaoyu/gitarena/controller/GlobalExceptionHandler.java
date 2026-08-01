@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.xiaoyu.gitarena.domain.Result;
 import org.xiaoyu.gitarena.security.CommandException;
+import org.xiaoyu.gitarena.service.LevelException;
 
 /**
  * 全局异常处理：把可预期的命令错误与参数校验错误包装成 {@link Result}，避免向前端泄漏堆栈。
@@ -20,6 +21,12 @@ public class GlobalExceptionHandler {
     /** 用户命令错误（非法命令、越权路径、无仓库等）——面向终端的友好提示。 */
     @ExceptionHandler(CommandException.class)
     public Result<Void> handleCommand(CommandException e) {
+        return Result.fail(400, e.getMessage());
+    }
+
+    /** 关卡不存在 / 不合契约等——面向使用者的友好提示。 */
+    @ExceptionHandler(LevelException.class)
+    public Result<Void> handleLevel(LevelException e) {
         return Result.fail(400, e.getMessage());
     }
 
