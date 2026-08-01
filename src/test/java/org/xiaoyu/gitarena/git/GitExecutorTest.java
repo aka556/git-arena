@@ -73,8 +73,8 @@ class GitExecutorTest {
     @Test
     void unsupportedGitSubcommandIsRejected() {
         git("init");
-        // branch 尚未进 M1 executor 的 switch —— 纵深防御：即便过了白名单也要挡下
-        assertThatThrownBy(() -> git("branch"))
+        // reset 尚未进 executor 的 switch —— 纵深防御：即便过了白名单也要挡下
+        assertThatThrownBy(() -> git("reset"))
                 .isInstanceOf(CommandException.class)
                 .hasMessageContaining("暂不支持的 git 子命令");
     }
@@ -280,6 +280,315 @@ class GitExecutorTest {
                 .contains("modified:   a.txt");
     }
 
+    // ---- git branch (M2) ---------------------------------------------------
+
+    @Test
+    void branchListMarksCurrentWithStar() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature");
+
+        String out = git("branch").stdout();
+        assertThat(out).contains("* main").contains("feature");
+    }
+
+    @Test
+    void branchCreateBeforeCommitIsRejected() {
+        git("init");
+        assertThatThrownBy(() -> git("branch", "feature"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("尚无提交");
+    }
+
+    @Test
+    void branchCreateDuplicateIsRejected() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature");
+        assertThatThrownBy(() -> git("branch", "feature"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("分支已存在");
+    }
+
+    @Test
+    void branchDeleteRemovesBranch() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature");
+        ExecOutput out = git("branch", "-d", "feature");
+
+        assertThat(out.stdout()).contains("Deleted branch feature");
+        assertThat(git("branch").stdout()).doesNotContain("feature");
+    }
+
+    @Test
+    void branchDeleteCurrentIsRejected() {
+        git("init");
+        commitFile("a.txt", "c1");
+        assertThatThrownBy(() -> git("branch", "-d", "main"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("当前所在分支");
+    }
+
+    // ---- git checkout / switch (M2) ---------------------------------------
+
+    @Test
+    void checkoutSwitchesToExistingBranch() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature");
+        ExecOutput out = git("checkout", "feature");
+
+        assertThat(out.stdout()).contains("Switched to branch 'feature'");
+        assertThat(git("status").stdout()).contains("On branch feature");
+    }
+
+    @Test
+    void checkoutDashBCreatesAndSwitches() {
+        git("init");
+        commitFile("a.txt", "c1");
+        ExecOutput out = git("checkout", "-b", "dev");
+
+        assertThat(out.stdout()).contains("Switched to a new branch 'dev'");
+        assertThat(git("status").stdout()).contains("On branch dev");
+    }
+
+    @Test
+    void checkoutNonexistentIsRejected() {
+        git("init");
+        commitFile("a.txt", "c1");
+        assertThatThrownBy(() -> git("checkout", "nope"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("未找到分支或提交");
+    }
+
+    @Test
+    void checkoutCommitDetachesHead() {
+        git("init");
+        commitFile("a.txt", "c1");
+        commitFile("b.txt", "c2");
+        // log 为最新在前：第 2 行是 c1 的短 sha
+        String[] logLines = git("log").stdout().split("\\R");
+        String c1Sha = logLines[1].split(" ")[0];
+
+        ExecOutput out = git("checkout", c1Sha);
+        assertThat(out.stdout()).contains("detached HEAD");
+        assertThat(git("branch").stdout()).contains("HEAD detached at");
+    }
+
+    @Test
+    void switchToExistingBranch() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature");
+        ExecOutput out = git("switch", "feature");
+
+        assertThat(out.stdout()).contains("Switched to branch 'feature'");
+    }
+
+    @Test
+    void switchDashCCreatesBranch() {
+        git("init");
+        commitFile("a.txt", "c1");
+        ExecOutput out = git("switch", "-c", "dev");
+
+        assertThat(out.stdout()).contains("Switched to a new branch 'dev'");
+        assertThat(git("status").stdout()).contains("On branch dev");
+    }
+
+    @Test
+    void switchToNonexistentIsRejected() {
+        git("init");
+        commitFile("a.txt", "c1");
+        assertThatThrownBy(() -> git("switch", "nope"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("没有名为");
+    }
+
+    // ---- git merge (M2) ----------------------------------------------------
+
+    @Test
+    void mergeFastForward() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("checkout", "-b", "feature");
+        commitFile("b.txt", "c2");
+        git("checkout", "main");
+        ExecOutput out = git("merge", "feature");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(out.stdout()).contains("Fast-forward");
+        assertThat(git("log").stdout()).contains("c2").contains("c1");
+    }
+
+    @Test
+    void mergeAlreadyUpToDate() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("branch", "feature"); // feature 指向 c1，是 main 的祖先
+        ExecOutput out = git("merge", "feature");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(out.stdout()).contains("Already up to date");
+    }
+
+    @Test
+    void mergeDivergedCreatesMergeCommit() {
+        git("init");
+        commitContent("shared.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitContent("f.txt", "feat", "fc");
+        git("checkout", "main");
+        commitContent("m.txt", "main", "mc");
+        ExecOutput out = git("merge", "feature");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(out.stdout()).contains("Merge made");
+    }
+
+    @Test
+    void mergeConflictReportsFailureAndLeavesState() {
+        git("init");
+        commitContent("file.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitContent("file.txt", "feature-change", "fc");
+        git("checkout", "main");
+        commitContent("file.txt", "main-change", "mc");
+        ExecOutput out = git("merge", "feature");
+
+        assertThat(out.ok()).isFalse();
+        assertThat(out.stderr()).contains("CONFLICT").contains("file.txt");
+    }
+
+    @Test
+    void mergeUnknownBranchIsRejected() {
+        git("init");
+        commitFile("a.txt", "c1");
+        assertThatThrownBy(() -> git("merge", "nope"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("未找到要合并的分支或提交");
+    }
+
+    // ---- git tag (M2) ------------------------------------------------------
+
+    @Test
+    void tagCreatesAndLists() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("tag", "v1.0");
+
+        assertThat(git("tag").stdout()).contains("v1.0");
+    }
+
+    @Test
+    void tagOnGivenCommit() {
+        git("init");
+        commitFile("a.txt", "c1");
+        commitFile("b.txt", "c2");
+        // 在上一个提交（HEAD~1 = c1）打标签
+        ExecOutput out = git("tag", "old", "HEAD~1");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(git("tag").stdout()).contains("old");
+    }
+
+    @Test
+    void tagDeleteRemovesTag() {
+        git("init");
+        commitFile("a.txt", "c1");
+        git("tag", "v1.0");
+        ExecOutput out = git("tag", "-d", "v1.0");
+
+        assertThat(out.stdout()).contains("Deleted tag v1.0");
+        assertThat(git("tag").stdout()).doesNotContain("v1.0");
+    }
+
+    // ---- git commit --amend (M2) -------------------------------------------
+
+    @Test
+    void commitAmendReplacesLastCommitKeepingSingleHistory() {
+        git("init");
+        commitContent("a.txt", "v1", "original");
+        helper("echo", "v2", ">", "a.txt");
+        git("add", "a.txt");
+        ExecOutput out = git("commit", "--amend", "-m", "amended");
+
+        assertThat(out.stdout()).contains("amended");
+        // 仍只有一个提交（amend 不新增历史）
+        assertThat(git("log").stdout().split("\\R")).hasSize(1);
+        assertThat(git("log").stdout()).contains("amended").doesNotContain("original");
+    }
+
+    @Test
+    void commitAmendBeforeAnyCommitIsRejected() {
+        git("init");
+        assertThatThrownBy(() -> git("commit", "--amend", "-m", "x"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("无法 --amend");
+    }
+
+    // ---- git rebase (M2) ---------------------------------------------------
+
+    @Test
+    void rebaseLinearizesDivergedHistory() {
+        git("init");
+        commitContent("base.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitContent("f.txt", "feat", "fc");
+        git("checkout", "main");
+        commitContent("m.txt", "main", "mc");
+        git("checkout", "feature");
+        ExecOutput out = git("rebase", "main");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(out.stdout()).contains("Successfully rebased");
+        // feature 现在接在 main 之后：c1 -> mc -> fc' 共 3 个
+        assertThat(git("log").stdout().split("\\R")).hasSize(3);
+    }
+
+    @Test
+    void rebaseConflictStopsThenContinues() throws java.io.IOException {
+        git("init");
+        commitContent("x.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitContent("x.txt", "feature", "fc");
+        git("checkout", "main");
+        commitContent("x.txt", "main", "mc");
+        git("checkout", "feature");
+
+        ExecOutput stopped = git("rebase", "main");
+        assertThat(stopped.ok()).isFalse();
+        assertThat(stopped.stderr()).contains("CONFLICT");
+
+        // 解决冲突后 add + --continue
+        java.nio.file.Files.writeString(tmp.resolve("x.txt"), "resolved\n");
+        git("add", "x.txt");
+        ExecOutput done = git("rebase", "--continue");
+        assertThat(done.ok()).isTrue();
+        assertThat(git("log").stdout().split("\\R")).hasSize(3);
+    }
+
+    // ---- git merge --squash (M2) -------------------------------------------
+
+    @Test
+    void mergeSquashStagesWithoutCommitting() {
+        git("init");
+        commitContent("base.txt", "base", "c1");
+        git("checkout", "-b", "feature");
+        commitContent("b.txt", "b", "fb");
+        commitContent("c.txt", "c", "fc");
+        git("checkout", "main");
+        ExecOutput out = git("merge", "--squash", "feature");
+
+        assertThat(out.ok()).isTrue();
+        assertThat(out.stdout()).contains("Squash");
+        assertThat(git("status").stdout()).contains("Changes to be committed");
+
+        // 提交后 main 只多一个单亲提交（feature 的两个提交不进入 main 历史）
+        git("commit", "-m", "squashed");
+        assertThat(git("log").stdout().split("\\R")).hasSize(2);
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private ExecOutput git(String sub, String... args) {
@@ -294,6 +603,12 @@ class GitExecutorTest {
 
     private void commitFile(String name, String message) {
         helper("touch", name);
+        git("add", name);
+        git("commit", "-m", message);
+    }
+
+    private void commitContent(String name, String content, String message) {
+        helper("echo", content, ">", name);
         git("add", name);
         git("commit", "-m", message);
     }
