@@ -44,7 +44,7 @@ public class GraphMapper {
 
             List<GitGraph.CommitNode> commits = readCommits(repo, heads, tags);
             List<GitGraph.BranchRef> branches = readBranches(heads);
-            List<GitGraph.TagRef> tagRefs = readTags(tags);
+            List<GitGraph.TagRef> tagRefs = readTags(repo, tags);
             GitGraph.HeadRef head = readHead(repo);
             GitGraph.WorkingDir workingDir = readWorkingDir(git);
 
@@ -123,10 +123,13 @@ public class GraphMapper {
         return branches;
     }
 
-    private List<GitGraph.TagRef> readTags(List<Ref> tags) {
+    private List<GitGraph.TagRef> readTags(Repository repo, List<Ref> tags) throws IOException {
         List<GitGraph.TagRef> result = new ArrayList<>(tags.size());
         for (Ref ref : tags) {
-            ObjectId id = ref.getPeeledObjectId() != null ? ref.getPeeledObjectId() : ref.getObjectId();
+            // 强制 peel：附注标签（git tag -a）指向 tag 对象，须解到底层 commit，否则
+            // target 对不上任何 commit 节点。轻量标签 peel 后 getPeeledObjectId 仍为 null，回退 getObjectId。
+            Ref peeled = repo.getRefDatabase().peel(ref);
+            ObjectId id = peeled.getPeeledObjectId() != null ? peeled.getPeeledObjectId() : peeled.getObjectId();
             result.add(new GitGraph.TagRef(
                     Repository.shortenRefName(ref.getName()),
                     id == null ? null : shortId(id.getName())
