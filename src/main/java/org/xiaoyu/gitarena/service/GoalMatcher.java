@@ -27,6 +27,10 @@ import java.util.regex.Pattern;
 public class GoalMatcher {
 
     public MatchResult match(GitGraph snapshot, LevelFile.GoalSpec goal, FileAtHead fileReader) {
+        return match(snapshot, goal, fileReader, PrMergedCheck.NONE);
+    }
+
+    public MatchResult match(GitGraph snapshot, LevelFile.GoalSpec goal, FileAtHead fileReader, PrMergedCheck prCheck) {
         List<String> reasons = new ArrayList<>();
         LevelFile.MatchPolicy policy = (goal.match() == null ? LevelFile.MatchPolicy.defaults() : goal.match()).withDefaults();
         LevelFile.GoalGraph gg = goal.graph();
@@ -43,6 +47,13 @@ public class GoalMatcher {
         Map<String, String> actualTag = new HashMap<>();
         for (GitGraph.TagRef t : snapshot.tags()) {
             actualTag.put(t.name(), t.target());
+        }
+        // remote/branch -> tracking 指向（快照即 tracking 视角，level-spec.md §5.3 规则 5）
+        Map<String, String> actualRemote = new HashMap<>();
+        for (GitGraph.RemoteRef r : snapshot.remotes()) {
+            for (GitGraph.RemoteBranch rb : r.branches()) {
+                actualRemote.put(r.name() + "/" + rb.name(), rb.target());
+            }
         }
 
         // ---- 索引 goal ----
@@ -83,6 +94,17 @@ public class GoalMatcher {
                 reasons.add("HEAD 应为游离（detached）状态");
             } else {
                 binder.bind(gg.head().ref(), snapshot.head().ref());
+            }
+        }
+        // 锚定远程跟踪分支（goal 给出 remotes 才比较）
+        for (LevelFile.Remote r : nz(gg.remotes())) {
+            for (LevelFile.RemoteBranch rb : nz(r.branches())) {
+                String actualId = actualRemote.get(r.name() + "/" + rb.name());
+                if (actualId == null) {
+                    reasons.add("远程跟踪分支缺失：" + r.name() + "/" + rb.name() + "（是否还没 fetch/push？）");
+                } else {
+                    binder.bind(rb.target(), actualId);
+                }
             }
         }
 
@@ -157,7 +179,7 @@ public class GoalMatcher {
 
         // ---- assertions ----
         for (LevelFile.Assertion a : nz(goal.assertions())) {
-            evaluateAssertion(a, actualBranch, fileReader, reasons);
+            evaluateAssertion(a, actualBranch, actualRemote, fileReader, prCheck, reasons);
         }
 
         return reasons.isEmpty() ? MatchResult.pass() : MatchResult.fail(reasons);
@@ -197,11 +219,27 @@ public class GoalMatcher {
     }
 
     private void evaluateAssertion(LevelFile.Assertion a, Map<String, String> actualBranch,
-                                   FileAtHead fileReader, List<String> reasons) {
+                                   Map<String, String> actualRemote,
+                                   FileAtHead fileReader, PrMergedCheck prCheck, List<String> reasons) {
         switch (a.type()) {
             case "branchExists" -> {
                 if (!actualBranch.containsKey(a.name())) {
                     reasons.add("断言失败：应存在分支 " + a.name());
+                }
+            }
+            case "branchPushed" -> {
+                String remote = a.remote() == null ? "origin" : a.remote();
+                String tracking = actualRemote.get(remote + "/" + a.name());
+                String local = actualBranch.get(a.name());
+                if (tracking == null) {
+                    reasons.add("断言失败：" + remote + "/" + a.name() + " 不存在（还没 push？）");
+                } else if (local == null || !local.equals(tracking)) {
+                    reasons.add("断言失败：" + remote + "/" + a.name() + " 与本地 " + a.name() + " 指向不一致");
+                }
+            }
+            case "prMerged" -> {
+                if (!prCheck.isMerged(a.number())) {
+                    reasons.add("断言失败：" + (a.number() == null ? "尚无 PR 被合并" : "PR #" + a.number() + " 未合并"));
                 }
             }
             case "fileAtHeadContains" -> {

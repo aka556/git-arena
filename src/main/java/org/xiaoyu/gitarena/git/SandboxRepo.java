@@ -25,6 +25,14 @@ public final class SandboxRepo {
         return root;
     }
 
+    /**
+     * 该会话模拟远程（origin 裸仓库）的目录：与工作区平级的兄弟目录，
+     * 避免被工作树跟踪、也不暴露给用户命令的路径空间（PathGuard 只放行 root 内）。
+     */
+    public Path originPath() {
+        return root.resolveSibling(root.getFileName() + ".origin.git");
+    }
+
     /** 是否已 {@code git init}（存在 .git 目录）。 */
     public boolean isInitialized() {
         return Files.isDirectory(root.resolve(".git"));

@@ -26,8 +26,8 @@ public class LevelValidator {
     private static final Pattern SEQ = Pattern.compile("^C[1-9][0-9]{0,3}$");
     private static final Pattern REF_NAME = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._/-]*$");
     private static final Set<String> SUPPORTED_ASSERTIONS =
-            Set.of("branchExists", "fileAtHeadContains", "fileAtHeadNotContains");
-    private static final Set<String> KNOWN_FUTURE_ASSERTIONS = Set.of("branchPushed", "prMerged");
+            Set.of("branchExists", "fileAtHeadContains", "fileAtHeadNotContains", "branchPushed", "prMerged");
+    private static final Set<String> KNOWN_FUTURE_ASSERTIONS = Set.of();
 
     public void validate(LevelFile level) {
         List<String> problems = new ArrayList<>();
@@ -75,6 +75,7 @@ public class LevelValidator {
         validateRefs(initial.tags(), seqs, "initial.tags", problems);
         validateHead(initial.head(), seqs, isEmpty(initial.commits()), "initial", problems);
         validateWorkingDir(initial.workingDir(), problems);
+        validateRemotes(initial.remotes(), seqs, true, "initial", problems);
     }
 
     private void validateGoal(LevelFile.GoalSpec goal, LevelFile.Meta meta, List<String> problems) {
@@ -87,6 +88,7 @@ public class LevelValidator {
         validateRefs(gg.branches(), seqs, "goal.branches", problems);
         validateRefs(gg.tags(), seqs, "goal.tags", problems);
         validateHead(gg.head(), seqs, isEmpty(gg.commits()), "goal", problems);
+        validateRemotes(gg.remotes(), seqs, false, "goal", problems);
         validateGoalReachability(gg, seqs, problems);
         validateAssertions(goal.assertions(), meta, problems);
     }
@@ -141,8 +143,7 @@ public class LevelValidator {
         }
     }
 
-    private void validateHead(LevelFile.Head head, Set<String> seqs, boolean commitsEmpty, String ctx, List<String> problems) {
-        if (head == null) {
+    private void validateHead(LevelFile.Head head, Set<String> seqs, boolean commitsEmpty, String ctx, List<String> problems) {        if (head == null) {
             problems.add(ctx + " 缺少 head");
             return;
         }
@@ -175,6 +176,44 @@ public class LevelValidator {
         }
     }
 
+    /**
+     * 校验 remotes（M3）：远程名唯一、远程分支名唯一、target 为存在的 seq；
+     * initial 侧还校验 tracked（缺省=target；字面量 "none" 表示本地不知道；否则须为存在的 seq）。
+     * 当前引擎仅支持单个远程（origin），多远程 fail-closed。
+     */
+    private void validateRemotes(List<LevelFile.Remote> remotes, Set<String> seqs, boolean isInitial,
+                                 String ctx, List<String> problems) {
+        if (remotes == null || remotes.isEmpty()) {
+            return;
+        }
+        if (remotes.size() > 1) {
+            problems.add(ctx + " 目前仅支持单个远程（origin），声明了 " + remotes.size() + " 个");
+        }
+        Set<String> remoteNames = new HashSet<>();
+        for (LevelFile.Remote r : remotes) {
+            if (r.name() == null || !REF_NAME.matcher(r.name()).matches()) {
+                problems.add(ctx + " 远程名非法：" + r.name());
+            } else if (!remoteNames.add(r.name())) {
+                problems.add(ctx + " 远程名重复：" + r.name());
+            }
+            Set<String> branchNames = new HashSet<>();
+            for (LevelFile.RemoteBranch b : nz(r.branches())) {
+                if (b.name() == null || !REF_NAME.matcher(b.name()).matches()) {
+                    problems.add(ctx + " 远程分支名非法：" + b.name());
+                } else if (!branchNames.add(b.name())) {
+                    problems.add(ctx + " 远程分支名重复：" + b.name());
+                }
+                if (!seqs.contains(b.target())) {
+                    problems.add(ctx + " 远程分支 " + b.name() + " 指向不存在的提交：" + b.target());
+                }
+                if (isInitial && b.tracked() != null && !"none".equals(b.tracked())
+                        && !seqs.contains(b.tracked())) {
+                    problems.add(ctx + " 远程分支 " + b.name() + " 的 tracked 指向不存在的提交：" + b.tracked());
+                }
+            }
+        }
+    }
+
     /** goal 每个提交必须从某个 goal 引用（branch/tag/detached head）可达（§5.1 无游离节点）。 */
     private void validateGoalReachability(LevelFile.GoalGraph gg, Set<String> seqs, List<String> problems) {
         Map<String, List<String>> parents = new java.util.HashMap<>();
@@ -185,6 +224,9 @@ public class LevelValidator {
         Deque<String> stack = new ArrayDeque<>();
         for (LevelFile.Ref b : nz(gg.branches())) stack.push(b.target());
         for (LevelFile.Ref t : nz(gg.tags())) stack.push(t.target());
+        for (LevelFile.Remote r : nz(gg.remotes())) {
+            for (LevelFile.RemoteBranch rb : nz(r.branches())) stack.push(rb.target());
+        }
         if (gg.head() != null && "detached".equals(gg.head().type())) stack.push(gg.head().ref());
         while (!stack.isEmpty()) {
             String seq = stack.pop();
@@ -215,6 +257,15 @@ public class LevelValidator {
             switch (a.type()) {
                 case "branchExists" -> {
                     if (isBlank(a.name())) problems.add("branchExists 断言缺少 name");
+                }
+                case "branchPushed" -> {
+                    if (isBlank(a.name())) problems.add("branchPushed 断言缺少 name");
+                }
+                case "prMerged" -> {
+                    // prMerged 仅协作房间关卡可用（§5.4）
+                    if (meta == null || !"collab".equals(meta.mode())) {
+                        problems.add("prMerged 断言仅 mode=collab 关卡可用");
+                    }
                 }
                 case "fileAtHeadContains", "fileAtHeadNotContains" -> {
                     if (isBlank(a.path())) problems.add(a.type() + " 断言缺少 path");

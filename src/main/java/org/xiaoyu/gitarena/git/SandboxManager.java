@@ -58,10 +58,11 @@ public class SandboxManager {
         return repo;
     }
 
-    /** 重置：清空并重建同一 sessionId 的工作目录（回到 git init 之前的空态）。 */
+    /** 重置：清空并重建同一 sessionId 的工作目录（回到 git init 之前的空态；连同模拟远程一并清除）。 */
     public SandboxRepo reset(String sessionId) {
         SandboxRepo repo = require(sessionId);
         deleteQuietly(repo.root());
+        deleteQuietly(repo.originPath());
         try {
             Files.createDirectories(repo.root());
         } catch (IOException e) {
@@ -72,7 +73,10 @@ public class SandboxManager {
 
     @PreDestroy
     void cleanupAll() {
-        repos.values().forEach(r -> deleteQuietly(r.root()));
+        repos.values().forEach(r -> {
+            deleteQuietly(r.root());
+            deleteQuietly(r.originPath());
+        });
         repos.clear();
     }
 
