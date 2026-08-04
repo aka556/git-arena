@@ -1,0 +1,44 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "fetch-remote",
+    "title": "抓取远程更新",
+    "description": "origin 上的 main 已经前进到 C2，但本地的 origin/main 还停在 C1（你还不知道远程更新了）。用 git fetch 把远程的最新情况同步到本地的远程跟踪分支——注意 fetch 不会动你自己的 main。",
+    "category": "remote",
+    "difficulty": 3,
+    "mode": "solo",
+    "orderIndex": 1
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "base.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "remote work", "files": { "remote.txt": "remote\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C1" } ],
+    "head": { "type": "branch", "ref": "main" },
+    "remotes": [
+      { "name": "origin", "branches": [ { "name": "main", "target": "C2", "tracked": "C1" } ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] }
+      ],
+      "branches": [ { "name": "main", "target": "C1" } ],
+      "head": { "type": "branch", "ref": "main" },
+      "remotes": [
+        { "name": "origin", "branches": [ { "name": "main", "target": "C2" } ] }
+      ]
+    }
+  },
+  "solution": {
+    "steps": [ { "run": "git fetch" } ],
+    "notes": "fetch 只更新 origin/main 这类远程跟踪分支，本地 main 不动，需要你之后自己 merge/rebase。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git fetch 会把远程最新状态取回到 origin/*", "costPoints": 0 },
+    { "tier": 2, "body": "注意目标里本地 main 仍在 C1——fetch 不会移动你的分支", "costPoints": 0 }
+  ]
+}

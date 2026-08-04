@@ -1,0 +1,45 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "pull-remote",
+    "title": "拉取并合并",
+    "description": "本地 main 落后于 origin：远程已经到 C2，本地还在 C1。用 git pull 把远程改动取回并合并进来，让本地 main 追上远程（这里是一次快进）。",
+    "category": "remote",
+    "difficulty": 3,
+    "mode": "solo",
+    "orderIndex": 2
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "base.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "remote work", "files": { "remote.txt": "remote\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C1" } ],
+    "head": { "type": "branch", "ref": "main" },
+    "remotes": [
+      { "name": "origin", "branches": [ { "name": "main", "target": "C2", "tracked": "C1" } ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] }
+      ],
+      "branches": [ { "name": "main", "target": "C2" } ],
+      "head": { "type": "branch", "ref": "main" },
+      "remotes": [
+        { "name": "origin", "branches": [ { "name": "main", "target": "C2" } ] }
+      ]
+    },
+    "match": { "compareWorkingDir": true }
+  },
+  "solution": {
+    "steps": [ { "run": "git pull" } ],
+    "notes": "git pull = git fetch + git merge origin/main。本地是 origin 的祖先，所以直接快进到 C2。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git pull 一步搞定：先 fetch 再合并", "costPoints": 0 },
+    { "tier": 2, "body": "合并后本地 main 和 origin/main 都应指向 C2，工作区干净", "costPoints": 5 }
+  ]
+}

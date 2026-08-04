@@ -1,0 +1,54 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "push-rejected",
+    "title": "被拒绝的推送",
+    "description": "本地 main（C3）和远程 main（C2）从 C1 分叉了。直接 push 会被拒绝（非快进）。先 git pull 把远程改动合并进来（生成合并提交 C4），再 push 上去。",
+    "category": "remote",
+    "difficulty": 4,
+    "mode": "solo",
+    "orderIndex": 4
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "base.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "remote work", "files": { "remote.txt": "remote\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "local work", "files": { "local.txt": "local\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C3" } ],
+    "head": { "type": "branch", "ref": "main" },
+    "remotes": [
+      { "name": "origin", "branches": [ { "name": "main", "target": "C2", "tracked": "C2" } ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C1"] },
+        { "seq": "C4", "parents": ["C3", "C2"] }
+      ],
+      "branches": [ { "name": "main", "target": "C4" } ],
+      "head": { "type": "branch", "ref": "main" },
+      "remotes": [
+        { "name": "origin", "branches": [ { "name": "main", "target": "C4" } ] }
+      ]
+    },
+    "assertions": [
+      { "type": "branchPushed", "name": "main" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git pull" },
+      { "run": "git push origin main" }
+    ],
+    "notes": "直接 push 会 non-fast-forward 被拒。git pull 把远程 C2 合并进来生成 C4（首父是本地 C3），此时本地包含了远程历史，再 push 就能快进。"
+  },
+  "hints": [
+    { "tier": 1, "body": "先 git push 看看会发生什么——它会被拒绝", "costPoints": 0 },
+    { "tier": 2, "body": "git pull 把远程改动合并进本地，生成合并提交", "costPoints": 5 },
+    { "tier": 3, "body": "合并后本地已包含远程历史，再 git push origin main 即可", "costPoints": 5 }
+  ]
+}
