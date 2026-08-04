@@ -268,6 +268,23 @@ class GoalMatcherTest {
         assertThat(matcher.match(snapshot, failing, reader).passed()).isFalse();
     }
 
+    @Test
+    void prMergedAssertionUsesInjectedCheck() {
+        GitGraph snapshot = snapshot(
+                List.of(node("aaa", List.of(), "first")),
+                List.of(branch("main", "aaa")),
+                head("branch", "main"));
+        LevelFile.GoalSpec goal = goal(
+                List.of(commit("C1", List.of())),
+                List.of(ref("main", "C1")),
+                head2("branch", "main"), null,
+                List.of(new LevelFile.Assertion("prMerged", null, null, null, null, 1)));
+
+        // 未合并 → 失败；已合并 → 通过
+        assertThat(matcher.match(snapshot, goal, noFiles, number -> false).passed()).isFalse();
+        assertThat(matcher.match(snapshot, goal, noFiles, number -> true).passed()).isTrue();
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private GitGraph snapshot(List<GitGraph.CommitNode> commits, List<GitGraph.BranchRef> branches, GitGraph.HeadRef head) {
