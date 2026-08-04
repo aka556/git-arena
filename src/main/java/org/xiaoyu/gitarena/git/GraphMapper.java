@@ -11,11 +11,13 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevSort;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.springframework.stereotype.Component;
 import org.xiaoyu.gitarena.domain.graph.GitGraph;
 import org.xiaoyu.gitarena.security.CommandException;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -41,8 +43,9 @@ public class GraphMapper {
 
             List<Ref> heads = repo.getRefDatabase().getRefsByPrefix(Constants.R_HEADS);
             List<Ref> tags = repo.getRefDatabase().getRefsByPrefix(Constants.R_TAGS);
+            List<Ref> remoteRefs = repo.getRefDatabase().getRefsByPrefix(Constants.R_REMOTES);
 
-            List<GitGraph.CommitNode> commits = readCommits(repo, heads, tags);
+            List<GitGraph.CommitNode> commits = readCommits(repo, concat(concat(heads, tags), remoteRefs));
             List<GitGraph.BranchRef> branches = readBranches(heads);
             List<GitGraph.TagRef> tagRefs = readTags(repo, tags);
             GitGraph.HeadRef head = readHead(repo);
@@ -54,7 +57,7 @@ public class GraphMapper {
                     branches,
                     tagRefs,
                     head,
-                    List.of(), // M1 无远程
+                    readRemotes(remoteRefs),
                     workingDir
             );
         } catch (IOException e) {
@@ -65,12 +68,35 @@ public class GraphMapper {
         }
     }
 
-    private List<GitGraph.CommitNode> readCommits(Repository repo, List<Ref> heads, List<Ref> tags) throws IOException {
+    /**
+     * 读取裸仓库（房间共享 origin）为 GitGraph——无工作区、无远程，仅提交/分支/tag/HEAD。
+     * 供协作房间的"共享远程图"渲染（§6.3 协作房间同一张远程图）。
+     */
+    public GitGraph mapBareOrigin(Path bareDir) {
+        try (Repository repo = new FileRepositoryBuilder().setGitDir(bareDir.toFile()).setBare().build()) {
+            List<Ref> heads = repo.getRefDatabase().getRefsByPrefix(Constants.R_HEADS);
+            List<Ref> tags = repo.getRefDatabase().getRefsByPrefix(Constants.R_TAGS);
+            return new GitGraph(
+                    GitGraph.CONTRACT_VERSION,
+                    readCommits(repo, concat(heads, tags)),
+                    readBranches(heads),
+                    readTags(repo, tags),
+                    readHead(repo),
+                    List.of(),
+                    new GitGraph.WorkingDir(List.of(), List.of(), List.of())
+            );
+        } catch (IOException e) {
+            log.warn("failed to read bare origin {}: {}", bareDir, e.getMessage());
+            throw new CommandException("读取房间共享仓库失败");
+        }
+    }
+
+    private List<GitGraph.CommitNode> readCommits(Repository repo, List<Ref> startRefs) throws IOException {
         List<RevCommit> ordered = new ArrayList<>();
         try (RevWalk walk = new RevWalk(repo)) {
             walk.sort(RevSort.TOPO, true);
             walk.sort(RevSort.COMMIT_TIME_DESC, true);
-            for (Ref ref : concat(heads, tags)) {
+            for (Ref ref : startRefs) {
                 ObjectId id = ref.getObjectId();
                 if (id != null) {
                     try {
@@ -138,6 +164,29 @@ public class GraphMapper {
         return result;
     }
 
+    /** refs/remotes/<remote>/<branch> 按远程名分组为契约的 remotes 结构（快照即 tracking 视角）。 */
+    private List<GitGraph.RemoteRef> readRemotes(List<Ref> remoteRefs) {
+        Map<String, List<GitGraph.RemoteBranch>> byRemote = new java.util.LinkedHashMap<>();
+        for (Ref ref : remoteRefs) {
+            String rest = ref.getName().substring(Constants.R_REMOTES.length());
+            int slash = rest.indexOf('/');
+            if (slash <= 0) {
+                continue; // 形如 refs/remotes/origin/HEAD 之外的异常形态，跳过
+            }
+            String remote = rest.substring(0, slash);
+            String branch = rest.substring(slash + 1);
+            if ("HEAD".equals(branch)) {
+                continue;
+            }
+            ObjectId id = ref.getObjectId();
+            byRemote.computeIfAbsent(remote, k -> new ArrayList<>())
+                    .add(new GitGraph.RemoteBranch(branch, id == null ? null : shortId(id.getName())));
+        }
+        List<GitGraph.RemoteRef> result = new ArrayList<>(byRemote.size());
+        byRemote.forEach((name, branches) -> result.add(new GitGraph.RemoteRef(name, branches)));
+        return result;
+    }
+
     private GitGraph.HeadRef readHead(Repository repo) throws IOException {
         Ref head = repo.exactRef(Constants.HEAD);
         if (head == null) {
@@ -167,8 +216,7 @@ public class GraphMapper {
         return new GitGraph.WorkingDir(sorted(staged), sorted(modified), sorted(untracked));
     }
 
-    private GitGraph emptyGraph() {
-        return new GitGraph(
+    private GitGraph emptyGraph() {        return new GitGraph(
                 GitGraph.CONTRACT_VERSION,
                 List.of(),
                 List.of(),

@@ -71,6 +71,7 @@ public class LevelBuilder {
             if (!commits.isEmpty()) {
                 Map<String, ObjectId> seqToOid = insertCommits(repo, commits);
                 writeRefs(repo, initial, seqToOid);
+                buildRemotes(git, sandbox, initial, seqToOid);
                 populateWorktree(git);
             }
             applyWorkingDir(git, sandbox, initial.workingDir());
@@ -182,6 +183,78 @@ public class LevelBuilder {
     /** 把工作区与索引重置到 HEAD（ObjectInserter 造完对象后，工作区仍为空，需填充）。 */
     private void populateWorktree(Git git) throws GitAPIException {
         git.reset().setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD).call();
+    }
+
+    /**
+     * 构建模拟远程（docs/level-spec.md §3.1 remotes 语义）：
+     * 在沙盒兄弟目录建 origin 裸仓库，把 spec 声明的远程分支物化进去（对象经临时 ref push 传输），
+     * 写 clone 式配置（remote.origin + branch.<name> 上游），最后按 {@code tracked} 设置本地
+     * remote-tracking 引用——缺省 = target（视为已 fetch），null = 本地不知道该远程分支。
+     */
+    private void buildRemotes(Git git, SandboxRepo sandbox, LevelFile.InitialSpec initial,
+                              Map<String, ObjectId> seqToOid) throws GitAPIException, IOException {
+        List<LevelFile.Remote> remotes = nullToEmpty(initial.remotes());
+        if (remotes.isEmpty()) {
+            return;
+        }
+        if (remotes.size() > 1) {
+            // 多远程（fork 工作流的 upstream）属 M3 后续阶段；fail-closed 而非静默忽略
+            throw new IOException("当前引擎仅支持单个远程（origin），关卡声明了 " + remotes.size() + " 个");
+        }
+        Repository repo = git.getRepository();
+        for (LevelFile.Remote remote : remotes) {
+            Path bare = sandbox.originPath();
+            try (Git ignored = Git.init().setBare(true).setDirectory(bare.toFile())
+                    .setInitialBranch("main").call()) {
+                // 建仓即可，后续用 push 灌对象
+            }
+            String url = bare.toAbsolutePath().toString().replace('\\', '/');
+            StoredConfig config = repo.getConfig();
+            config.setString("remote", remote.name(), "url", url);
+            config.setString("remote", remote.name(), "fetch",
+                    "+refs/heads/*:refs/remotes/" + remote.name() + "/*");
+
+            List<org.eclipse.jgit.transport.RefSpec> pushSpecs = new ArrayList<>();
+            for (LevelFile.RemoteBranch rb : remote.branches()) {
+                ObjectId target = seqToOid.get(rb.target());
+                if (target == null) {
+                    throw new IOException("远程分支目标不存在：" + rb.target());
+                }
+                // 临时 ref 承载要传输的对象；push 后即删
+                RefUpdate tmp = repo.updateRef("refs/arena-build/" + rb.name());
+                tmp.setNewObjectId(target);
+                tmp.setForceUpdate(true);
+                tmp.update();
+                pushSpecs.add(new org.eclipse.jgit.transport.RefSpec(
+                        "+refs/arena-build/" + rb.name() + ":refs/heads/" + rb.name()));
+            }
+            git.push().setRemote(remote.name()).setRefSpecs(pushSpecs).call();
+            for (LevelFile.RemoteBranch rb : remote.branches()) {
+                RefUpdate del = repo.updateRef("refs/arena-build/" + rb.name());
+                del.setForceUpdate(true);
+                del.delete();
+
+                // tracking：缺省=target（已 fetch）；显式 null（spec 里写 "tracked": null 无法与缺省区分，
+                // Jackson 均为 null）→ 约定用字面量 "none" 表示"本地不知道"
+                String tracked = rb.tracked() == null ? rb.target() : rb.tracked();
+                if (!"none".equals(tracked)) {
+                    ObjectId trackedOid = seqToOid.get(tracked);
+                    if (trackedOid == null) {
+                        throw new IOException("tracked 指向不存在的提交：" + tracked);
+                    }
+                    RefUpdate tr = repo.updateRef("refs/remotes/" + remote.name() + "/" + rb.name());
+                    tr.setNewObjectId(trackedOid);
+                    tr.setForceUpdate(true);
+                    tr.update();
+                }
+                // 本地同名分支挂上游（git pull 需要）
+                if (repo.findRef(Constants.R_HEADS + rb.name()) != null) {
+                    config.setString("branch", rb.name(), "remote", remote.name());
+                    config.setString("branch", rb.name(), "merge", Constants.R_HEADS + rb.name());
+                }
+            }
+            config.save();
+        }
     }
 
     /** 应用 workingDir 构建配方：覆盖写文件（null=删除），再 git add 指定子集（§4.2）。 */

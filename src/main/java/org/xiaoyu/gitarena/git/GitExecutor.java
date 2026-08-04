@@ -19,6 +19,7 @@ import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -89,6 +90,10 @@ public class GitExecutor {
                 case "merge" -> gitMerge(git, cmd.args());
                 case "tag" -> gitTag(git, cmd.args());
                 case "rebase" -> gitRebase(git, cmd.args());
+                case "fetch" -> gitFetch(git, cmd.args());
+                case "pull" -> gitPull(git, cmd.args());
+                case "push" -> gitPush(git, cmd.args());
+                case "remote" -> gitRemote(git, cmd.args());
                 default -> throw new CommandException("暂不支持的 git 子命令：" + sub);
             };
         } catch (IOException e) {
@@ -491,6 +496,122 @@ public class GitExecutor {
     private String conflictHint(RebaseResult result) {
         List<String> conflicts = result.getConflicts();
         return conflicts == null || conflicts.isEmpty() ? "" : "，涉及 " + conflicts;
+    }
+
+    // ---- 远程（M3：本地 file 传输的模拟 origin，不出网） ---------------------
+
+    /** 校验远程存在；用户只能引用关卡预置的远程（不允许自带 URL——§7 不信任用户输入）。 */
+    private String requireRemote(Repository repo, String name) {
+        if (!repo.getRemoteNames().contains(name)) {
+            throw new CommandException(repo.getRemoteNames().isEmpty()
+                    ? "本仓库没有配置远程（本关卡未提供 origin）"
+                    : "未知远程：" + name);
+        }
+        return name;
+    }
+
+    private ExecOutput gitFetch(Git git, List<String> args) throws GitAPIException {
+        String remote = requireRemote(git.getRepository(),
+                firstNonFlag(args) != null ? firstNonFlag(args) : "origin");
+        var result = git.fetch().setRemote(remote).call();
+        StringBuilder sb = new StringBuilder();
+        for (org.eclipse.jgit.transport.TrackingRefUpdate u : result.getTrackingRefUpdates()) {
+            sb.append(Repository.shortenRefName(u.getLocalName()))
+                    .append(" -> ").append(shortId(u.getNewObjectId().getName())).append('\n');
+        }
+        return ExecOutput.ok(sb.length() == 0 ? "Already up to date." : sb.toString().stripTrailing());
+    }
+
+    private ExecOutput gitPull(Git git, List<String> args) throws GitAPIException, IOException {
+        Repository repo = git.getRepository();
+        requireRemote(repo, "origin");
+        if (repo.getBranch() == null || repo.resolve(Constants.HEAD) == null) {
+            throw new CommandException("当前分支还没有提交，无法 pull");
+        }
+        try {
+            var result = git.pull().call();
+            if (!result.isSuccessful()) {
+                MergeResult mr = result.getMergeResult();
+                if (mr != null && mr.getMergeStatus() == MergeResult.MergeStatus.CONFLICTING) {
+                    return ExecOutput.error("CONFLICT: 拉取的改动与本地冲突于 " + mr.getConflicts().keySet()
+                            + "\n请编辑冲突文件后 git add，再 git commit 完成合并");
+                }
+                return ExecOutput.error("pull 未完成：" + result);
+            }
+            MergeResult mr = result.getMergeResult();
+            String status = mr == null ? "" : switch (mr.getMergeStatus()) {
+                case ALREADY_UP_TO_DATE -> "Already up to date.";
+                case FAST_FORWARD -> "Fast-forward";
+                case MERGED -> "Merge made by the 'recursive' strategy.";
+                default -> mr.getMergeStatus().toString();
+            };
+            return ExecOutput.ok(status);
+        } catch (org.eclipse.jgit.api.errors.NoHeadException | org.eclipse.jgit.api.errors.InvalidConfigurationException e) {
+            throw new CommandException("当前分支未设置上游（本关卡的分支未关联远程）");
+        }
+    }
+
+    private ExecOutput gitPush(Git git, List<String> args) throws GitAPIException, IOException {
+        Repository repo = git.getRepository();
+        List<String> positional = positionalArgs(args);
+        String remote = requireRemote(repo, positional.isEmpty() ? "origin" : positional.get(0));
+        String branch = positional.size() > 1 ? positional.get(1) : repo.getBranch();
+        if (branch == null || repo.exactRef(Constants.R_HEADS + branch) == null) {
+            throw new CommandException("要推送的分支不存在：" + branch
+                    + (branch == null ? "" : "（detached HEAD 请先切回分支）"));
+        }
+        // 非强制 refspec：非快进推送会被拒绝——这正是 push-rejected 关卡的考点
+        var spec = new org.eclipse.jgit.transport.RefSpec(
+                Constants.R_HEADS + branch + ":" + Constants.R_HEADS + branch);
+        Iterable<org.eclipse.jgit.transport.PushResult> results =
+                git.push().setRemote(remote).setRefSpecs(spec).call();
+
+        for (org.eclipse.jgit.transport.PushResult pr : results) {
+            for (org.eclipse.jgit.transport.RemoteRefUpdate u : pr.getRemoteUpdates()) {
+                switch (u.getStatus()) {
+                    case OK, UP_TO_DATE -> {
+                        // 同步 tracking 引用，让图上的 origin/<branch> 立即反映推送结果
+                        RefUpdate tr = repo.updateRef("refs/remotes/" + remote + "/" + branch);
+                        tr.setNewObjectId(u.getNewObjectId());
+                        tr.setForceUpdate(true);
+                        tr.update();
+                    }
+                    case REJECTED_NONFASTFORWARD -> {
+                        return ExecOutput.error("! [rejected] " + branch + " -> " + branch + " (non-fast-forward)"
+                                + "\n远程包含你本地没有的提交。先 git pull 整合远程改动，再 push");
+                    }
+                    default -> {
+                        return ExecOutput.error("push 失败：" + u.getStatus()
+                                + (u.getMessage() == null ? "" : "（" + u.getMessage() + "）"));
+                    }
+                }
+            }
+        }
+        return ExecOutput.ok("To " + remote + "\n   " + branch + " -> " + branch);
+    }
+
+    private ExecOutput gitRemote(Git git, List<String> args) {
+        Repository repo = git.getRepository();
+        var names = repo.getRemoteNames();
+        if (names.isEmpty()) {
+            return ExecOutput.ok("(无远程)");
+        }
+        boolean verbose = args.contains("-v") || args.contains("--verbose");
+        if (!args.isEmpty() && !verbose) {
+            // 只读白名单：不支持 add/remove 等修改远程的子操作（远程由关卡预置）
+            throw new CommandException("remote 仅支持查看：git remote 或 git remote -v");
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String name : names) {
+            if (verbose) {
+                String url = repo.getConfig().getString("remote", name, "url");
+                sb.append(name).append('\t').append(url).append(" (fetch)\n");
+                sb.append(name).append('\t').append(url).append(" (push)\n");
+            } else {
+                sb.append(name).append('\n');
+            }
+        }
+        return ExecOutput.ok(sb.toString().stripTrailing());
     }
 
     // ---- helpers (touch / echo) -------------------------------------------
