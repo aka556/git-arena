@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import org.xiaoyu.gitarena.domain.dto.HintDtos;
+import org.xiaoyu.gitarena.domain.dto.ScoreDtos;
 import org.xiaoyu.gitarena.domain.entity.LevelHintEntity;
 import org.xiaoyu.gitarena.domain.entity.ScoreEventEntity;
 import org.xiaoyu.gitarena.domain.entity.User;
@@ -123,7 +124,10 @@ class EngagementIntegrationTest {
         scoreService.award(lowerId, "manual", "test-lower", 3);
         scoreService.award(higherId, "manual", "test-higher", 8);
 
-        assertThat(scoreService.leaderboard()).extracting(entry -> entry.userId())
+        ScoreDtos.Board board = scoreService.leaderboard(ScoreDtos.PERIOD_ALL);
+
+        assertThat(board.metric()).isEqualTo(ScoreDtos.METRIC_TOTAL);
+        assertThat(board.entries()).extracting(entry -> entry.userId())
                 .containsSubsequence(higherId, lowerId);
     }
 
