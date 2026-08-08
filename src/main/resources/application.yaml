@@ -6,10 +6,16 @@ spring:
     name: git-arena
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/git-arena
+    url: jdbc:postgresql://localhost:5432/git-arena?stringtype=unspecified
     username: postgres
     password: 556AW334
     driver-class-name: org.postgresql.Driver
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 3000ms
 
   flyway:
     enabled: true
