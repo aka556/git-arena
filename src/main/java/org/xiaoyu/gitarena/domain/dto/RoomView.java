@@ -27,6 +27,11 @@ public record RoomView(
             String status,
             String mergeable,
             String mergedByMemberId,
-            Long mergedAt
+            Long mergedAt,
+            /** 生效中的 approve 数（同一评审者只算其最新一次）。 */
+            int approvals,
+            /** 是否被"请求修改"挡住合并（database.md §4.4 闸门）。 */
+            boolean changesRequested,
+            int commentCount
     ) {}
 }

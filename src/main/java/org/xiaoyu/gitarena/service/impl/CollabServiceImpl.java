@@ -3,8 +3,11 @@ package org.xiaoyu.gitarena.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.xiaoyu.gitarena.config.MaintenanceProperties;
 import org.xiaoyu.gitarena.domain.collab.PullRequest;
 import org.xiaoyu.gitarena.domain.collab.Room;
 import org.xiaoyu.gitarena.domain.dto.CommandResponse;
@@ -30,11 +33,11 @@ import org.xiaoyu.gitarena.service.CollabService;
 import org.xiaoyu.gitarena.service.CommandService;
 import org.xiaoyu.gitarena.service.GraphService;
 import org.xiaoyu.gitarena.service.LevelRegistry;
+import org.xiaoyu.gitarena.service.PrReviewService;
 import org.xiaoyu.gitarena.service.ScoreService;
 
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -73,21 +76,47 @@ public class CollabServiceImpl implements CollabService {
     private final LevelRegistry levelRegistry;
     private final ScoreService scoreService;
     private final AchievementService achievementService;
+    private final MaintenanceProperties maintenanceProperties;
+    private final PrReviewService prReviewService;
+    private final JdbcTemplate jdbc;
 
     private final Map<String, Room> roomsById = new ConcurrentHashMap<>();
     private final Map<String, String> roomIdByJoinCode = new ConcurrentHashMap<>();
-    private Path roomsBaseDir;
 
-    private synchronized Path roomsBaseDir() {
-        if (roomsBaseDir == null) {
-            try {
-                roomsBaseDir = Files.createDirectories(
-                        Path.of(System.getProperty("java.io.tmpdir"), "git-arena-rooms"));
-            } catch (IOException e) {
-                throw new IllegalStateException("无法创建房间根目录", e);
-            }
+    /**
+     * 新建一行沙盒台账（database.md §3.2）。带上 expires_at 是回收作业的前提——
+     * 台账扫描按 (status, expires_at) 走，expires_at 为空的行永远扫不到，会成为磁盘泄漏源。
+     *
+     * <p>插入后立刻向 {@link SandboxManager} 登记豁免：该沙盒此后由台账 TTL 治理，
+     * 内存侧的固定空闲阈值不得再插手，否则会抢先删掉目录连带用户未 push 的提交。
+     */
+    private SandboxRepoEntity insertSandboxRow(String sandboxKey, Long ownerUserId, String kind, Long roomId) {
+        OffsetDateTime now = OffsetDateTime.now();
+        SandboxRepoEntity row = new SandboxRepoEntity();
+        row.setSandboxKey(sandboxKey);
+        row.setOwnerUserId(ownerUserId);
+        row.setRepoKind(kind);
+        row.setRoomId(roomId);
+        row.setStatus(SandboxRepoEntity.STATUS_ACTIVE);
+        row.setLastActiveAt(now);
+        row.setExpiresAt(now.plus(maintenanceProperties.sandboxTtlOrDefault()));
+        sandboxRepoMapper.insert(row);
+        sandboxManager.markLedgerManaged(sandboxKey);
+        return row;
+    }
+
+    /** 成员活动即为整个房间续期：成员克隆与共享 origin 一起滑动，避免房间还热着就被回收。 */
+    private void touchSandboxes(Long roomRowId, Long sandboxId) {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plus(maintenanceProperties.sandboxTtlOrDefault());
+        try {
+            jdbc.update("""
+                    UPDATE sandbox_repos SET last_active_at = now(), expires_at = ?
+                    WHERE (id = ? OR room_id = ?) AND status IN ('active', 'idle')
+                    """, expiresAt, sandboxId, roomRowId);
+        } catch (RuntimeException e) {
+            // 续期失败不该挡住用户的命令：最坏结果是该沙盒提前一轮进回收，用户重连即重建。
+            log.warn("沙盒续期失败 room={} sandbox={}: {}", roomRowId, sandboxId, e.getMessage());
         }
-        return roomsBaseDir;
     }
 
     @Override
@@ -95,16 +124,12 @@ public class CollabServiceImpl implements CollabService {
         Long userId = CurrentUser.require();
         String roomId = UUID.randomUUID().toString();
         String joinCode = roomId.substring(0, 6);
-        Path origin = roomsBaseDir().resolve(roomId + ".git");
+        Path origin = sandboxManager.roomsBaseDir().resolve(roomId + ".git");
         roomRepo.createRoomOrigin(origin);
 
         // 落库：先写 room_origin 沙盒台账，再写 rooms（origin_sandbox_id 外键）
-        SandboxRepoEntity originRow = new SandboxRepoEntity();
-        originRow.setSandboxKey("rooms/" + roomId + ".git");
-        originRow.setOwnerUserId(userId);
-        originRow.setRepoKind(SandboxRepoEntity.KIND_ROOM_ORIGIN);
-        originRow.setStatus(SandboxRepoEntity.STATUS_ACTIVE);
-        sandboxRepoMapper.insert(originRow);
+        SandboxRepoEntity originRow = insertSandboxRow(
+                "rooms/" + roomId + ".git", userId, SandboxRepoEntity.KIND_ROOM_ORIGIN, null);
 
         RoomEntity roomRow = new RoomEntity();
         roomRow.setPublicId(roomId);
@@ -152,13 +177,8 @@ public class CollabServiceImpl implements CollabService {
         SandboxRepo sandbox = sandboxManager.create();
         roomRepo.cloneMember(room.getOriginPath(), sandbox.root());
 
-        SandboxRepoEntity cloneRow = new SandboxRepoEntity();
-        cloneRow.setSandboxKey(sandbox.sessionId());
-        cloneRow.setOwnerUserId(userId);
-        cloneRow.setRepoKind(SandboxRepoEntity.KIND_ROOM_CLONE);
-        cloneRow.setRoomId(roomRowId);
-        cloneRow.setStatus(SandboxRepoEntity.STATUS_ACTIVE);
-        sandboxRepoMapper.insert(cloneRow);
+        SandboxRepoEntity cloneRow = insertSandboxRow(
+                sandbox.sessionId(), userId, SandboxRepoEntity.KIND_ROOM_CLONE, roomRowId);
 
         String color = AVATAR_PALETTE[memberCount(roomRowId) % AVATAR_PALETTE.length];
         RoomMemberEntity memberRow = new RoomMemberEntity();
@@ -182,13 +202,8 @@ public class CollabServiceImpl implements CollabService {
             // 沙盒已随进程重启丢失：重建克隆，更新 room_clone 台账与成员行的 local_sandbox_id
             sandbox = sandboxManager.create();
             roomRepo.cloneMember(room.getOriginPath(), sandbox.root());
-            SandboxRepoEntity cloneRow = new SandboxRepoEntity();
-            cloneRow.setSandboxKey(sandbox.sessionId());
-            cloneRow.setOwnerUserId(memberRow.getUserId());
-            cloneRow.setRepoKind(SandboxRepoEntity.KIND_ROOM_CLONE);
-            cloneRow.setRoomId(roomRowId);
-            cloneRow.setStatus(SandboxRepoEntity.STATUS_ACTIVE);
-            sandboxRepoMapper.insert(cloneRow);
+            SandboxRepoEntity cloneRow = insertSandboxRow(
+                    sandbox.sessionId(), memberRow.getUserId(), SandboxRepoEntity.KIND_ROOM_CLONE, roomRowId);
             memberRow.setLocalSandboxId(cloneRow.getId());
             roomMemberMapper.updateById(memberRow);
         }
@@ -217,8 +232,10 @@ public class CollabServiceImpl implements CollabService {
         }
         String sessionId = sessionIdOf(memberRow);
         CommandResponse response = commandService.execute(sessionId, command);
-        // push 改变共享 origin → 广播让其他成员刷新共享图
+        touchSandboxes(memberRow.getRoomId(), memberRow.getLocalSandboxId());
+        // push 改变共享 origin → 行级评论的行号要跟着重算（§4.5），再广播让其他成员刷新共享图
         if (response.ok() && command.strip().startsWith("git push")) {
+            relocateAnchorsQuietly(roomId);
             broadcast(room);
         }
         return response;
@@ -273,6 +290,11 @@ public class CollabServiceImpl implements CollabService {
         if (!PullRequest.STATUS_OPEN.equals(prRow.getStatus())) {
             throw new CommandException("PR #" + number + " 已经是 " + prRow.getStatus() + " 状态");
         }
+        // 评审闸门（database.md §4.4）：有未被更晚评审取代的 changes_requested 就挡住合并。
+        // 评审若不影响合并，"评审"只是摆设，教不会协作里的把关环节。
+        if (prReviewService.isBlockedByChangesRequested(prRow.getId())) {
+            throw new CommandException("PR #" + number + " 有评审者请求修改，需其重新评审通过后才能合并");
+        }
         RoomRepo.MergeOutcome outcome = roomRepo.mergePullRequest(room.getOriginPath(),
                 prRow.getSourceBranch(), prRow.getTargetBranch(),
                 "Merge PR #" + number + ": " + prRow.getTitle());
@@ -287,8 +309,28 @@ public class CollabServiceImpl implements CollabService {
         prRow.setMergedAt(OffsetDateTime.now());
         pullRequestMapper.updateById(prRow);
         awardPrAuthor(roomId, prRow);
+        // 合并推进了目标分支 → merge-base 变了，旧侧锚点须重算（§4.5）
+        relocateAnchorsQuietly(roomId);
         broadcast(room);
         return toView(room);
+    }
+
+    /** 评审活动（提交评审/评论）后把房间快照广播出去，让其他成员的 PR 面板即时更新。 */
+    @EventListener
+    public void onPrActivity(PrReviewServiceImpl.PrActivityEvent event) {
+        Room room = roomsById.get(event.roomId());
+        if (room != null) {
+            broadcast(room);
+        }
+    }
+
+    /** 锚点重算是评论展示的辅助，失败不该影响 push/merge 本身的成败。 */
+    private void relocateAnchorsQuietly(String roomId) {
+        try {
+            prReviewService.relocateAnchors(roomId);
+        } catch (RuntimeException e) {
+            log.warn("PR 行级评论锚点重算失败 room={}: {}", roomId, e.getMessage());
+        }
     }
 
     // ---- 内部 ----
@@ -403,15 +445,21 @@ public class CollabServiceImpl implements CollabService {
                     m.getAvatarColor(), m.getRole()));
         }
         List<RoomView.PullRequestView> prs = new ArrayList<>();
-        for (PullRequestEntity p : pullRequestMapper.selectList(new LambdaQueryWrapper<PullRequestEntity>()
+        List<PullRequestEntity> prRows = pullRequestMapper.selectList(new LambdaQueryWrapper<PullRequestEntity>()
                 .eq(PullRequestEntity::getRoomId, roomRow.getId())
-                .orderByAsc(PullRequestEntity::getNumber))) {
+                .orderByAsc(PullRequestEntity::getNumber));
+        // 批量取评审统计：广播频繁，逐条查会随 PR 数量 N+1 放大
+        Map<Long, PrReviewService.Stats> stats = prReviewService.statsOf(
+                prRows.stream().map(PullRequestEntity::getId).toList());
+        for (PullRequestEntity p : prRows) {
+            PrReviewService.Stats stat = stats.getOrDefault(p.getId(), PrReviewService.Stats.EMPTY);
             prs.add(new RoomView.PullRequestView(p.getNumber(), p.getTitle(), p.getDescription(),
                     p.getSourceBranch(), p.getTargetBranch(),
                     p.getAuthorMemberId() == null ? null : String.valueOf(p.getAuthorMemberId()),
                     p.getStatus(), p.getMergeable(),
                     p.getMergedByMemberId() == null ? null : String.valueOf(p.getMergedByMemberId()),
-                    p.getMergedAt() == null ? null : p.getMergedAt().toEpochSecond() * 1000L));
+                    p.getMergedAt() == null ? null : p.getMergedAt().toEpochSecond() * 1000L,
+                    stat.approvals(), stat.changesRequested(), stat.commentCount()));
         }
         return new RoomView(room.getRoomId(), room.getJoinCode(), room.getName(), room.getScenarioLevelSlug(),
                 roomRow.getOwnerUserId() == null ? null : ownerMemberId(roomRow.getId()), members, prs);
