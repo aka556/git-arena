@@ -5,7 +5,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import org.xiaoyu.gitarena.domain.dto.AuthDtos;
+import org.xiaoyu.gitarena.domain.dto.LevelDetail;
 import org.xiaoyu.gitarena.domain.dto.ProgressView;
+import org.xiaoyu.gitarena.domain.entity.LevelHintEntity;
+import org.xiaoyu.gitarena.mapper.LevelHintMapper;
 import org.xiaoyu.gitarena.security.CommandException;
 import org.xiaoyu.gitarena.security.TokenStore;
 
@@ -32,6 +35,10 @@ class AuthProgressIntegrationTest {
     private TokenStore tokenStore;
     @Autowired
     private LevelRegistry levelRegistry;
+    @Autowired
+    private LevelHintMapper levelHintMapper;
+    @Autowired
+    private LevelService levelService;
 
     private static String uniqueName() {
         return "test-" + UUID.randomUUID().toString().substring(0, 8);
@@ -116,5 +123,26 @@ class AuthProgressIntegrationTest {
     void anonymous_progress_is_not_persisted() {
         progressService.record(null, "first-commit", true);
         assertThat(progressService.myProgress(null)).isEmpty();
+    }
+
+    @Test
+    void level_hints_are_seeded_into_db_and_detail_reads_from_db() {
+        String slug = "first-commit"; // 该关卡文件带 1 条 hint（LevelSeeder 已拆行写入 level_hints）
+        Long levelId = levelRegistry.idOf(slug);
+        assertThat(levelId).as("关卡应已 seed 进库").isNotNull();
+
+        // 库中应有该关卡的提示行，且与关卡文件同源（tier/body/costPoints）
+        List<LevelHintEntity> rows = levelHintMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<LevelHintEntity>()
+                        .eq(LevelHintEntity::getLevelId, levelId)
+                        .orderByAsc(LevelHintEntity::getOrderIndex));
+        assertThat(rows).isNotEmpty();
+
+        // detail 从库读提示（回退逻辑只在库空时触发）
+        LevelDetail detail = levelService.detail(slug, null);
+        assertThat(detail.hints()).isNotEmpty();
+        assertThat(detail.hints().get(0).tier()).isEqualTo(rows.get(0).getTier());
+        assertThat(detail.hints().get(0).body()).isEqualTo(rows.get(0).getBody());
+        assertThat(detail.hints().get(0).costPoints()).isEqualTo(rows.get(0).getCostPoints());
     }
 }

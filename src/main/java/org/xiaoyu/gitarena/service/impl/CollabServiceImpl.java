@@ -25,10 +25,12 @@ import org.xiaoyu.gitarena.mapper.RoomMemberMapper;
 import org.xiaoyu.gitarena.mapper.SandboxRepoMapper;
 import org.xiaoyu.gitarena.security.CommandException;
 import org.xiaoyu.gitarena.security.CurrentUser;
+import org.xiaoyu.gitarena.service.AchievementService;
 import org.xiaoyu.gitarena.service.CollabService;
 import org.xiaoyu.gitarena.service.CommandService;
 import org.xiaoyu.gitarena.service.GraphService;
 import org.xiaoyu.gitarena.service.LevelRegistry;
+import org.xiaoyu.gitarena.service.ScoreService;
 
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -69,6 +71,8 @@ public class CollabServiceImpl implements CollabService {
     private final PullRequestMapper pullRequestMapper;
     private final SandboxRepoMapper sandboxRepoMapper;
     private final LevelRegistry levelRegistry;
+    private final ScoreService scoreService;
+    private final AchievementService achievementService;
 
     private final Map<String, Room> roomsById = new ConcurrentHashMap<>();
     private final Map<String, String> roomIdByJoinCode = new ConcurrentHashMap<>();
@@ -282,6 +286,7 @@ public class CollabServiceImpl implements CollabService {
         prRow.setMergedByMemberId(requireMemberByUser(roomRow.getId(), userId).getId());
         prRow.setMergedAt(OffsetDateTime.now());
         pullRequestMapper.updateById(prRow);
+        awardPrAuthor(roomId, prRow);
         broadcast(room);
         return toView(room);
     }
@@ -366,6 +371,23 @@ public class CollabServiceImpl implements CollabService {
             return null;
         }
         return levelRegistry.idOf(slug);
+    }
+
+    private void awardPrAuthor(String roomId, PullRequestEntity prRow) {
+        if (prRow.getAuthorMemberId() == null) {
+            return;
+        }
+        RoomMemberEntity author = roomMemberMapper.selectById(prRow.getAuthorMemberId());
+        if (author == null || author.getUserId() == null) {
+            return;
+        }
+        String sourceRef = roomId + "#" + prRow.getNumber();
+        try {
+            scoreService.award(author.getUserId(), "pr_merged", sourceRef, 15);
+            achievementService.onPullRequestMerged(author.getUserId(), sourceRef);
+        } catch (RuntimeException e) {
+            log.warn("PR 合并成功但奖励发放失败 room={} pr=#{}: {}", roomId, prRow.getNumber(), e.getMessage());
+        }
     }
 
     private void broadcast(Room room) {

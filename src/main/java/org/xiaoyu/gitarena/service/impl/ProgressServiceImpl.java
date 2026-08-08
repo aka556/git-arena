@@ -7,8 +7,10 @@ import org.springframework.stereotype.Service;
 import org.xiaoyu.gitarena.domain.dto.ProgressView;
 import org.xiaoyu.gitarena.domain.entity.UserLevelProgress;
 import org.xiaoyu.gitarena.mapper.UserLevelProgressMapper;
+import org.xiaoyu.gitarena.service.AchievementService;
 import org.xiaoyu.gitarena.service.LevelRegistry;
 import org.xiaoyu.gitarena.service.ProgressService;
+import org.xiaoyu.gitarena.service.ScoreService;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -21,6 +23,8 @@ public class ProgressServiceImpl implements ProgressService {
 
     private final UserLevelProgressMapper progressMapper;
     private final LevelRegistry levelRegistry;
+    private final ScoreService scoreService;
+    private final AchievementService achievementService;
 
     @Override
     public void record(Long userId, String slug, boolean passed) {
@@ -33,6 +37,7 @@ public class ProgressServiceImpl implements ProgressService {
         }
         try {
             OffsetDateTime now = OffsetDateTime.now();
+            boolean firstCompletion = false;
             UserLevelProgress existing = progressMapper.selectOne(new LambdaQueryWrapper<UserLevelProgress>()
                     .eq(UserLevelProgress::getUserId, userId)
                     .eq(UserLevelProgress::getLevelId, levelId));
@@ -47,6 +52,7 @@ public class ProgressServiceImpl implements ProgressService {
                     row.setStatus("completed");
                     row.setStarRating(3);
                     row.setFirstCompletedAt(now);
+                    firstCompletion = true;
                 } else {
                     row.setStatus("in_progress");
                     row.setStarRating(0);
@@ -59,10 +65,15 @@ public class ProgressServiceImpl implements ProgressService {
                     existing.setStatus("completed");
                     existing.setStarRating(3);
                     existing.setFirstCompletedAt(now);
+                    firstCompletion = true;
                 } else if (!passed && "unlocked".equals(existing.getStatus())) {
                     existing.setStatus("in_progress");
                 }
                 progressMapper.updateById(existing);
+            }
+            if (firstCompletion) {
+                scoreService.award(userId, "level_complete", slug, 10);
+                achievementService.onLevelCompleted(userId, slug);
             }
         } catch (Exception e) {
             // 进度落库是非关键副作用，失败只记日志，不影响校验结果返回（§3）
