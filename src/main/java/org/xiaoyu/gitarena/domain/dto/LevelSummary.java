@@ -7,5 +7,7 @@ public record LevelSummary(
         String category,
         int difficulty,
         String mode,
+        String status,
+        int attempts,
         int orderIndex
 ) {}

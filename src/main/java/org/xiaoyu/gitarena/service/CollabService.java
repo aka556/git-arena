@@ -9,6 +9,10 @@ import org.xiaoyu.gitarena.domain.graph.GitGraph;
 /**
  * 协作房间服务（§3 CollabService，M3 阶段B）：建房/加入、共享 origin 图、成员命令、PR 开/列/合并。
  * 状态变更后向 {@code /topic/rooms/{roomId}} 广播最新房间快照（WebSocketConfig）。
+ *
+ * <p>鉴权一律以 {@link org.xiaoyu.gitarena.security.CurrentUser}（登录用户）为准：memberId 只是
+ * 展示/引用标识，不是凭证——命令执行校验「当前用户 == 该成员行的 user_id」，合并 PR 校验
+ * 「当前用户 == 房主」。匿名用户不能参与协作房间（需先登录）。
  */
 public interface CollabService {
 

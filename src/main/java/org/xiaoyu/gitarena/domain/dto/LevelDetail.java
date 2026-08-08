@@ -15,6 +15,8 @@ public record LevelDetail(
         String category,
         int difficulty,
         String mode,
+        String status,
+        int attempts,
         GitGraph initialGraph,
         GitGraph goalGraph,
         List<HintView> hints

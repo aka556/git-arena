@@ -50,6 +50,11 @@ public class SandboxManager {
         return repo;
     }
 
+    /** 按 sessionId 查找仍存活的沙盒；不存在返回 null（不抛异常，供"重连复用"判断）。 */
+    public SandboxRepo find(String sessionId) {
+        return repos.get(sessionId);
+    }
+
     public SandboxRepo require(String sessionId) {
         SandboxRepo repo = repos.get(sessionId);
         if (repo == null) {

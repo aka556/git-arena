@@ -12,9 +12,9 @@ import java.util.List;
  */
 public interface LevelService {
 
-    List<LevelSummary> list();
+    List<LevelSummary> list(Long userId);
 
-    LevelDetail detail(String slug);
+    LevelDetail detail(String slug, Long userId);
 
     /** 新建沙盒并把关卡 initial 构建进去，返回当前图 + 目标图。 */
     StartLevelResponse start(String slug);

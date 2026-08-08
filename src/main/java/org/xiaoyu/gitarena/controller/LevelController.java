@@ -14,7 +14,9 @@ import org.xiaoyu.gitarena.domain.dto.LevelSummary;
 import org.xiaoyu.gitarena.domain.dto.StartLevelResponse;
 import org.xiaoyu.gitarena.domain.dto.ValidateLevelRequest;
 import org.xiaoyu.gitarena.domain.dto.ValidateResponse;
+import org.xiaoyu.gitarena.security.CurrentUser;
 import org.xiaoyu.gitarena.service.LevelService;
+import org.xiaoyu.gitarena.service.ProgressService;
 
 import java.util.List;
 
@@ -27,15 +29,16 @@ import java.util.List;
 public class LevelController {
 
     private final LevelService levelService;
+    private final ProgressService progressService;
 
     @GetMapping
     public Result<List<LevelSummary>> list() {
-        return Result.ok(levelService.list());
+        return Result.ok(levelService.list(CurrentUser.id()));
     }
 
     @GetMapping("/{slug}")
     public Result<LevelDetail> detail(@PathVariable String slug) {
-        return Result.ok(levelService.detail(slug));
+        return Result.ok(levelService.detail(slug, CurrentUser.id()));
     }
 
     @PostMapping("/{slug}/start")
@@ -46,6 +49,9 @@ public class LevelController {
     @PostMapping("/{slug}/validate")
     public Result<ValidateResponse> validate(@PathVariable String slug,
                                              @Valid @RequestBody ValidateLevelRequest request) {
-        return Result.ok(levelService.validate(request.sessionId(), slug));
+        ValidateResponse response = levelService.validate(request.sessionId(), slug);
+        // 登录用户的每次校验落库为一次进度尝试（首过即通关）；匿名用户不落库（record 内部判空）。
+        progressService.record(CurrentUser.id(), slug, response.passed());
+        return Result.ok(response);
     }
 }

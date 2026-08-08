@@ -17,6 +17,7 @@ import org.xiaoyu.gitarena.service.GraphService;
 import org.xiaoyu.gitarena.service.LevelCatalog;
 import org.xiaoyu.gitarena.service.LevelService;
 import org.xiaoyu.gitarena.service.MatchResult;
+import org.xiaoyu.gitarena.service.ProgressService;
 import org.xiaoyu.gitarena.service.SpecGraphConverter;
 
 import java.util.ArrayList;
@@ -33,23 +34,35 @@ public class LevelServiceImpl implements LevelService {
     private final SpecGraphConverter converter;
     private final GoalMatcher goalMatcher;
     private final RepoInspector repoInspector;
+    private final ProgressService progressService;
 
     @Override
-    public List<LevelSummary> list() {
+    public List<LevelSummary> list(Long userId) {
+        var progressBySlug = progressService.myProgress(userId).stream()
+                .collect(java.util.stream.Collectors.toMap(p -> p.slug(), p -> p));
         List<LevelSummary> result = new ArrayList<>();
         for (LevelFile level : catalog.list()) {
             LevelFile.Meta m = level.meta();
+            var progress = progressBySlug.get(m.slug());
+            String status = progress == null ? "unlocked" : progress.status();
+            int attempts = progress == null ? 0 : progress.attempts();
             result.add(new LevelSummary(
                     m.slug(), m.title(), m.category(), m.difficulty(), m.mode(),
+                    status, attempts,
                     m.orderIndex() == null ? 0 : m.orderIndex()));
         }
         return result;
     }
 
     @Override
-    public LevelDetail detail(String slug) {
+    public LevelDetail detail(String slug, Long userId) {
         LevelFile level = catalog.get(slug);
         LevelFile.Meta m = level.meta();
+        var progress = progressService.myProgress(userId).stream()
+                .filter(p -> p.slug().equals(slug))
+                .findFirst();
+        String status = progress.map(p -> p.status()).orElse("unlocked");
+        int attempts = progress.map(p -> p.attempts()).orElse(0);
         List<LevelDetail.HintView> hints = new ArrayList<>();
         if (level.hints() != null) {
             for (LevelFile.Hint h : level.hints()) {
@@ -61,6 +74,7 @@ public class LevelServiceImpl implements LevelService {
         }
         return new LevelDetail(
                 m.slug(), m.title(), m.description(), m.category(), m.difficulty(), m.mode(),
+                status, attempts,
                 converter.fromInitial(level.initial()),
                 converter.fromGoal(level.goal().graph()),
                 hints);

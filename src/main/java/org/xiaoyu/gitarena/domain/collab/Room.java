@@ -4,18 +4,14 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.nio.file.Path;
-import java.util.Collection;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 协作房间（M3 阶段B，内存对象）。一个房间 = 一份共享的裸 origin 仓库 + 若干成员，
+ * 协作房间（M3 阶段B，运行时句柄）。一个房间 = 一份共享的裸 origin 仓库 + 若干成员，
  * 每个成员各持一份从 origin 克隆出的本地沙盒；成员通过 push/pull 相互可见（§1 协作差异化）。
  *
- * <p><b>M3 决策</b>：与全项目一致，房间/成员/PR 仅存内存（并发安全集合），不写库——持久化（rooms /
- * room_members / pull_requests 表）依赖 P1 用户体系，届时再落库（database.md §4）。
+ * <p><b>落库后职责</b>：本对象只承载<b>运行时句柄</b>（共享裸 origin 的目录路径、房间元数据），
+ * 供 JGit 操作与广播使用；成员身份、PR 业务流一律以数据库为真相（database.md §4.1–§4.3），
+ * 不在此缓存成员/PR 集合——避免内存与库不一致。
  */
 @Getter
 public class Room {
@@ -32,14 +28,8 @@ public class Room {
     private final String scenarioLevelSlug;
     private final long createdAt;
 
-    private final ConcurrentHashMap<String, RoomMember> members = new ConcurrentHashMap<>();
-    private final CopyOnWriteArrayList<PullRequest> pullRequests = new CopyOnWriteArrayList<>();
-    private final AtomicInteger prSequence = new AtomicInteger(0);
-
     @Setter
     private String status = STATUS_OPEN;
-    @Setter
-    private String ownerMemberId;
 
     public Room(String roomId, String joinCode, String name, Path originPath, String scenarioLevelSlug, long createdAt) {
         this.roomId = roomId;
@@ -48,36 +38,5 @@ public class Room {
         this.originPath = originPath;
         this.scenarioLevelSlug = scenarioLevelSlug;
         this.createdAt = createdAt;
-    }
-
-    public void addMember(RoomMember member) {
-        members.put(member.getMemberId(), member);
-        if (ownerMemberId == null) {
-            ownerMemberId = member.getMemberId();
-        }
-    }
-
-    public RoomMember member(String memberId) {
-        return members.get(memberId);
-    }
-
-    public Collection<RoomMember> memberList() {
-        return members.values();
-    }
-
-    public int nextPrNumber() {
-        return prSequence.incrementAndGet();
-    }
-
-    public void addPullRequest(PullRequest pr) {
-        pullRequests.add(pr);
-    }
-
-    public List<PullRequest> pullRequestList() {
-        return List.copyOf(pullRequests);
-    }
-
-    public PullRequest pullRequest(int number) {
-        return pullRequests.stream().filter(p -> p.getNumber() == number).findFirst().orElse(null);
     }
 }
