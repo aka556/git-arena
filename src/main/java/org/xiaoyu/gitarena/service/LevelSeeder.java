@@ -1,5 +1,6 @@
 package org.xiaoyu.gitarena.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -8,7 +9,9 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.xiaoyu.gitarena.domain.entity.LevelHintEntity;
 import org.xiaoyu.gitarena.domain.level.LevelFile;
+import org.xiaoyu.gitarena.mapper.LevelHintMapper;
 
 /**
  * 启动时把 classpath 关卡 seed 进 levels 表（P1：进度落库需要 level 外键存在，database.md §3.4）。
@@ -41,6 +44,7 @@ public class LevelSeeder implements ApplicationRunner {
     private final LevelRegistry registry;
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final LevelHintMapper levelHintMapper;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -53,9 +57,32 @@ public class LevelSeeder implements ApplicationRunner {
                     json(level.initial()), json(level.goal()), json(level.solution()),
                     level.specVersion());
             registry.register(m.slug(), id);
+            seedHints(id, level.hints());
             seeded++;
         }
         log.info("已 seed {} 个关卡到 levels 表（进度落库外键就绪）", seeded);
+    }
+
+    /**
+     * 把关卡文件的 hints 拆行写入 level_hints（database.md §5.4）。先删后插保证幂等——
+     * 引擎升级重启时提示内容以文件为准整体刷新，不残留旧行。
+     */
+    private void seedHints(Long levelId, java.util.List<LevelFile.Hint> hints) {
+        levelHintMapper.delete(new LambdaQueryWrapper<LevelHintEntity>()
+                .eq(LevelHintEntity::getLevelId, levelId));
+        if (hints == null) {
+            return;
+        }
+        int order = 0;
+        for (LevelFile.Hint h : hints) {
+            LevelHintEntity row = new LevelHintEntity();
+            row.setLevelId(levelId);
+            row.setOrderIndex(order++);
+            row.setTier(h.tier() == null ? 1 : h.tier());
+            row.setBody(h.body());
+            row.setCostPoints(h.costPoints() == null ? 0 : h.costPoints());
+            levelHintMapper.insert(row);
+        }
     }
 
     private String json(Object value) {

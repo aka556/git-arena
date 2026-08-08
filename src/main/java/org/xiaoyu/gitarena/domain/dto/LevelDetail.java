@@ -21,5 +21,9 @@ public record LevelDetail(
         GitGraph goalGraph,
         List<HintView> hints
 ) {
-    public record HintView(int tier, String body, int costPoints) {}
+    public record HintView(Long id, int tier, String body, int costPoints, boolean used) {
+        public HintView(int tier, String body, int costPoints) {
+            this(null, tier, body, costPoints, false);
+        }
+    }
 }

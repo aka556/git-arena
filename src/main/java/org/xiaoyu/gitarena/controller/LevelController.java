@@ -17,6 +17,7 @@ import org.xiaoyu.gitarena.domain.dto.ValidateResponse;
 import org.xiaoyu.gitarena.security.CurrentUser;
 import org.xiaoyu.gitarena.service.LevelService;
 import org.xiaoyu.gitarena.service.ProgressService;
+import org.xiaoyu.gitarena.service.HintService;
 
 import java.util.List;
 
@@ -30,6 +31,7 @@ public class LevelController {
 
     private final LevelService levelService;
     private final ProgressService progressService;
+    private final HintService hintService;
 
     @GetMapping
     public Result<List<LevelSummary>> list() {
@@ -53,5 +55,11 @@ public class LevelController {
         // 登录用户的每次校验落库为一次进度尝试（首过即通关）；匿名用户不落库（record 内部判空）。
         progressService.record(CurrentUser.id(), slug, response.passed());
         return Result.ok(response);
+    }
+
+    @PostMapping("/{slug}/hints/{hintId}/use")
+    public Result<org.xiaoyu.gitarena.domain.dto.HintDtos.UseResponse> useHint(
+            @PathVariable String slug, @PathVariable Long hintId) {
+        return Result.ok(hintService.use(CurrentUser.id(), slug, hintId));
     }
 }
