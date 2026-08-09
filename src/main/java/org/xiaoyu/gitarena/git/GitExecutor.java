@@ -33,8 +33,11 @@ import org.xiaoyu.gitarena.security.PathGuard;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -49,8 +52,9 @@ import java.util.TreeSet;
 @Component
 public class GitExecutor {
 
-    private static final String AUTHOR_NAME = "player";
-    private static final String AUTHOR_EMAIL = "player@git-arena.local";
+    /** 真实 git 默认 log 的日期样式：{@code Sat Aug 9 14:30:00 2026 +0800}。 */
+    private static final DateTimeFormatter GIT_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss yyyy Z", Locale.ENGLISH);
 
     private final PathGuard pathGuard;
     private final SandboxShellExecutor shellExecutor;
@@ -66,27 +70,33 @@ public class GitExecutor {
     }
 
     public ExecOutput execute(SandboxRepo sandbox, ParsedCommand cmd) {
+        return execute(sandbox, cmd, CommitIdentity.PLAYER);
+    }
+
+    /** 以指定提交身份执行：登录用户的用户名/邮箱进入 author/committer，git log 可辨认是谁提交的。 */
+    public ExecOutput execute(SandboxRepo sandbox, ParsedCommand cmd, CommitIdentity identity) {
         if (cmd.isGit()) {
-            return runGit(sandbox, cmd);
+            return runGit(sandbox, cmd, identity);
         }
         return shellExecutor.execute(sandbox, cmd);
     }
 
     // ---- git ---------------------------------------------------------------
 
-    private ExecOutput runGit(SandboxRepo sandbox, ParsedCommand cmd) {
+    private ExecOutput runGit(SandboxRepo sandbox, ParsedCommand cmd, CommitIdentity identity) {
         String sub = cmd.subcommand();
         if ("init".equals(sub)) {
-            return gitInit(sandbox);
+            return gitInit(sandbox, identity);
         }
         if (!sandbox.isInitialized()) {
             throw new CommandException("当前目录不是 git 仓库，请先执行：git init");
         }
         try (Git git = Git.open(sandbox.root().toFile())) {
+            syncIdentity(git, identity);
             return switch (sub) {
                 case "add" -> gitAdd(sandbox, git, cmd.args());
-                case "commit" -> gitCommit(git, cmd.args());
-                case "log" -> gitLog(git);
+                case "commit" -> gitCommit(git, cmd.args(), identity);
+                case "log" -> gitLog(git, cmd.args());
                 case "status" -> gitStatus(git);
                 case "branch" -> gitBranch(git, cmd.args());
                 case "checkout" -> gitCheckout(git, cmd.args());
@@ -108,23 +118,41 @@ public class GitExecutor {
         }
     }
 
-    private ExecOutput gitInit(SandboxRepo sandbox) {
+    private ExecOutput gitInit(SandboxRepo sandbox, CommitIdentity identity) {
         boolean existed = sandbox.isInitialized();
         try (Git git = Git.init()
                 .setDirectory(sandbox.root().toFile())
                 .setInitialBranch("main")
                 .call()) {
-            // 写入固定身份：merge 等自动提交走仓库 UserConfig，没有它 JGit 会退回系统用户名（不确定）
-            StoredConfig config = git.getRepository().getConfig();
-            config.setString("user", null, "name", AUTHOR_NAME);
-            config.setString("user", null, "email", AUTHOR_EMAIL);
-            config.save();
+            // 写入身份：merge 等自动提交走仓库 UserConfig，没有它 JGit 会退回系统用户名（不确定）
+            writeIdentity(git, identity);
             return ExecOutput.ok(existed
                     ? "Reinitialized existing Git repository in .git/"
                     : "Initialized empty Git repository in .git/ (branch main)");
         } catch (GitAPIException | IOException e) {
             throw new CommandException("git init 失败：" + e.getMessage());
         }
+    }
+
+    /** 登录态可能在会话中途变化：与仓库 config 不一致时同步，保证自动提交（merge/pull）也用对身份。 */
+    private void syncIdentity(Git git, CommitIdentity identity) {
+        StoredConfig config = git.getRepository().getConfig();
+        if (identity.name().equals(config.getString("user", null, "name"))
+                && identity.email().equals(config.getString("user", null, "email"))) {
+            return;
+        }
+        try {
+            writeIdentity(git, identity);
+        } catch (IOException e) {
+            log.warn("failed to sync identity for repo {}: {}", git.getRepository().getDirectory(), e.getMessage());
+        }
+    }
+
+    private void writeIdentity(Git git, CommitIdentity identity) throws IOException {
+        StoredConfig config = git.getRepository().getConfig();
+        config.setString("user", null, "name", identity.name());
+        config.setString("user", null, "email", identity.email());
+        config.save();
     }
 
     private ExecOutput gitAdd(SandboxRepo sandbox, Git git, List<String> args) throws GitAPIException {
@@ -152,7 +180,8 @@ public class GitExecutor {
         return ExecOutput.ok(""); // git add 成功时无输出
     }
 
-    private ExecOutput gitCommit(Git git, List<String> args) throws GitAPIException, IOException {
+    private ExecOutput gitCommit(Git git, List<String> args, CommitIdentity identity)
+            throws GitAPIException, IOException {
         Repository repo = git.getRepository();
         boolean amend = args.contains("--amend");
         String message = extractMessage(args);
@@ -163,13 +192,13 @@ public class GitExecutor {
             }
             // --amend 修改上一次提交：可只改信息（无暂存改动亦可）；message 缺省沿用原信息
             var commitCmd = git.commit().setAmend(true)
-                    .setAuthor(AUTHOR_NAME, AUTHOR_EMAIL)
-                    .setCommitter(AUTHOR_NAME, AUTHOR_EMAIL);
+                    .setAuthor(identity.name(), identity.email())
+                    .setCommitter(identity.name(), identity.email());
             if (message != null) {
                 commitCmd.setMessage(message);
             }
             RevCommit commit = commitCmd.call();
-            return ExecOutput.ok("[" + repo.getBranch() + " " + shortId(commit.getName()) + "] "
+            return ExecOutput.ok("[" + headLabel(repo) + " " + shortId(commit.getName()) + "] "
                     + firstLine(commit.getShortMessage()) + " (amended)");
         }
 
@@ -186,23 +215,41 @@ public class GitExecutor {
         try {
             RevCommit commit = git.commit()
                     .setMessage(message)
-                    .setAuthor(AUTHOR_NAME, AUTHOR_EMAIL)
-                    .setCommitter(AUTHOR_NAME, AUTHOR_EMAIL)
+                    .setAuthor(identity.name(), identity.email())
+                    .setCommitter(identity.name(), identity.email())
                     .setAllowEmpty(false)
                     .call();
-            String branch = repo.getBranch();
-            return ExecOutput.ok("[" + branch + " " + shortId(commit.getName()) + "] " + firstLine(message));
+            return ExecOutput.ok("[" + headLabel(repo) + " " + shortId(commit.getName()) + "] " + firstLine(message));
         } catch (EmptyCommitException e) {
             throw new CommandException("nothing to commit（没有已暂存的改动，请先 git add）");
         }
     }
 
-    private ExecOutput gitLog(Git git) throws GitAPIException {
+    /** 提交输出的头部标注：在分支上显示分支名；游离 HEAD 仿真实 git 显示 {@code detached HEAD}。 */
+    private String headLabel(Repository repo) throws IOException {
+        Ref head = repo.exactRef(Constants.HEAD);
+        if (head != null && !head.isSymbolic()) {
+            return "detached HEAD";
+        }
+        return repo.getBranch();
+    }
+
+    private ExecOutput gitLog(Git git, List<String> args) throws GitAPIException {
+        boolean oneline = args.contains("--oneline");
+        for (String a : args) {
+            if (!"--oneline".equals(a)) {
+                throw new CommandException("git log 目前只支持 --oneline 选项");
+            }
+        }
         try {
             Iterable<RevCommit> commits = git.log().call();
             StringBuilder sb = new StringBuilder();
             for (RevCommit c : commits) {
-                sb.append(shortId(c.getName())).append(' ').append(firstLine(c.getFullMessage())).append('\n');
+                if (oneline) {
+                    sb.append(shortId(c.getName())).append(' ').append(firstLine(c.getFullMessage())).append('\n');
+                } else {
+                    appendFullCommit(sb, c);
+                }
             }
             if (sb.length() == 0) {
                 return ExecOutput.ok("(暂无提交)");
@@ -213,16 +260,47 @@ public class GitExecutor {
         }
     }
 
+    /** 仿真实 git 的默认 log 块：commit 全 hash / Merge 行 / Author / Date / 缩进正文。 */
+    private void appendFullCommit(StringBuilder sb, RevCommit c) {
+        if (sb.length() > 0) {
+            sb.append('\n');
+        }
+        sb.append("commit ").append(c.getName()).append('\n');
+        if (c.getParentCount() > 1) {
+            sb.append("Merge:");
+            for (RevCommit parent : c.getParents()) {
+                sb.append(' ').append(shortId(parent.getName()));
+            }
+            sb.append('\n');
+        }
+        PersonIdent author = c.getAuthorIdent();
+        sb.append("Author: ").append(author.getName())
+                .append(" <").append(author.getEmailAddress()).append(">\n");
+        sb.append("Date:   ").append(GIT_DATE_FORMAT.format(
+                ZonedDateTime.ofInstant(author.getWhen().toInstant(), author.getTimeZone().toZoneId()))).append('\n');
+        sb.append('\n');
+        for (String line : c.getFullMessage().stripTrailing().split("\\R", -1)) {
+            sb.append("    ").append(line).append('\n');
+        }
+    }
+
     private ExecOutput gitStatus(Git git) throws GitAPIException {
         Status s = git.status().call();
-        String branch;
+        String headline;
         try {
-            branch = git.getRepository().getBranch();
+            // 游离 HEAD 仿真实 git 显示 "HEAD detached at <短 sha>"，而非把全 sha 当分支名
+            Repository repo = git.getRepository();
+            Ref head = repo.exactRef(Constants.HEAD);
+            if (head != null && !head.isSymbolic() && head.getObjectId() != null) {
+                headline = "HEAD detached at " + shortId(head.getObjectId().getName());
+            } else {
+                headline = "On branch " + repo.getBranch();
+            }
         } catch (Exception e) {
-            branch = "main";
+            headline = "On branch main";
         }
 
-        StringBuilder sb = new StringBuilder("On branch ").append(branch).append('\n');
+        StringBuilder sb = new StringBuilder(headline).append('\n');
         boolean clean = true;
 
         if (!s.getAdded().isEmpty() || !s.getChanged().isEmpty() || !s.getRemoved().isEmpty()) {
@@ -448,8 +526,9 @@ public class GitExecutor {
             RevObject target = walk.parseAny(oid);
             var tagCmd = git.tag().setName(name).setObjectId(target).setAnnotated(annotated);
             if (annotated) {
+                // tagger 读仓库 config（syncIdentity 维护），与提交身份一致
                 tagCmd.setMessage(message != null ? message : name)
-                        .setTagger(new PersonIdent(AUTHOR_NAME, AUTHOR_EMAIL));
+                        .setTagger(new PersonIdent(repo));
             }
             tagCmd.call();
             return ExecOutput.ok("");

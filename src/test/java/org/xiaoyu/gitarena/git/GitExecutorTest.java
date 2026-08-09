@@ -248,10 +248,32 @@ class GitExecutorTest {
         commitFile("a.txt", "first");
         commitFile("b.txt", "second");
 
-        String[] lines = git("log").stdout().split("\\R");
+        String[] lines = git("log", "--oneline").stdout().split("\\R");
         assertThat(lines).hasSize(2);
         assertThat(lines[0]).contains("second"); // 最新在前
         assertThat(lines[1]).contains("first");
+    }
+
+    @Test
+    void logDefaultFormatShowsAuthorEmailAndDate() {
+        git("init");
+        commitFile("a.txt", "first commit");
+
+        String out = git("log").stdout();
+        assertThat(out)
+                .contains("commit ")
+                .contains("Author: player <player@git-arena.local>")
+                .contains("Date:   ")
+                .contains("    first commit"); // 正文缩进 4 空格（真实 git 版式）
+    }
+
+    @Test
+    void logRejectsUnknownOption() {
+        git("init");
+        commitFile("a.txt", "c1");
+        assertThatThrownBy(() -> git("log", "--graph"))
+                .isInstanceOf(CommandException.class)
+                .hasMessageContaining("--oneline");
     }
 
     @Test
@@ -383,7 +405,7 @@ class GitExecutorTest {
         commitFile("a.txt", "c1");
         commitFile("b.txt", "c2");
         // log 为最新在前：第 2 行是 c1 的短 sha
-        String[] logLines = git("log").stdout().split("\\R");
+        String[] logLines = git("log", "--oneline").stdout().split("\\R");
         String c1Sha = logLines[1].split(" ")[0];
 
         ExecOutput out = git("checkout", c1Sha);
@@ -530,7 +552,7 @@ class GitExecutorTest {
 
         assertThat(out.stdout()).contains("amended");
         // 仍只有一个提交（amend 不新增历史）
-        assertThat(git("log").stdout().split("\\R")).hasSize(1);
+        assertThat(git("log", "--oneline").stdout().split("\\R")).hasSize(1);
         assertThat(git("log").stdout()).contains("amended").doesNotContain("original");
     }
 
@@ -558,7 +580,7 @@ class GitExecutorTest {
         assertThat(out.ok()).isTrue();
         assertThat(out.stdout()).contains("Successfully rebased");
         // feature 现在接在 main 之后：c1 -> mc -> fc' 共 3 个
-        assertThat(git("log").stdout().split("\\R")).hasSize(3);
+        assertThat(git("log", "--oneline").stdout().split("\\R")).hasSize(3);
     }
 
     @Test
@@ -580,7 +602,7 @@ class GitExecutorTest {
         git("add", "x.txt");
         ExecOutput done = git("rebase", "--continue");
         assertThat(done.ok()).isTrue();
-        assertThat(git("log").stdout().split("\\R")).hasSize(3);
+        assertThat(git("log", "--oneline").stdout().split("\\R")).hasSize(3);
     }
 
     // ---- git merge --squash (M2) -------------------------------------------
@@ -601,7 +623,64 @@ class GitExecutorTest {
 
         // 提交后 main 只多一个单亲提交（feature 的两个提交不进入 main 历史）
         git("commit", "-m", "squashed");
-        assertThat(git("log").stdout().split("\\R")).hasSize(2);
+        assertThat(git("log", "--oneline").stdout().split("\\R")).hasSize(2);
+    }
+
+    // ---- 提交身份（登录用户名/邮箱入 author，log 可辨认是谁）-----------------
+
+    @Test
+    void statusInDetachedHeadShowsDetachedLabel() {
+        git("init");
+        commitFile("a.txt", "c1");
+        String sha = git("log", "--oneline").stdout().split(" ")[0];
+        git("checkout", sha);
+
+        // 仿真实 git：游离态不显示 "On branch <全 sha>"
+        assertThat(git("status").stdout()).startsWith("HEAD detached at " + sha);
+    }
+
+    @Test
+    void commitInDetachedHeadShowsDetachedLabel() {
+        git("init");
+        commitFile("a.txt", "c1");
+        String sha = git("log", "--oneline").stdout().split(" ")[0];
+        git("checkout", sha);
+        helper("touch", "b.txt");
+        git("add", "b.txt");
+
+        ExecOutput out = git("commit", "-m", "detached commit");
+
+        assertThat(out.stdout()).startsWith("[detached HEAD ");
+    }
+
+    @Test
+    void executeWithIdentitySignsCommitAndLogShowsIt() {
+        CommitIdentity alice = new CommitIdentity("alice", "alice@example.com");
+        gitAs(alice, "init");
+        helper("touch", "a.txt");
+        gitAs(alice, "add", "a.txt");
+        gitAs(alice, "commit", "-m", "by alice");
+
+        assertThat(git("log").stdout()).contains("Author: alice <alice@example.com>");
+    }
+
+    @Test
+    void mergeCommitUsesCurrentIdentityViaRepoConfig() {
+        git("init");
+        commitFile("base.txt", "base");
+        git("switch", "-c", "feature");
+        commitFile("f.txt", "on feature");
+        git("switch", "main");
+        commitFile("m.txt", "on main");
+
+        // merge 提交由 JGit 走仓库 config 身份——syncIdentity 须已把登录身份写入
+        CommitIdentity alice = new CommitIdentity("alice", "alice@example.com");
+        ExecOutput out = gitAs(alice, "merge", "feature");
+
+        assertThat(out.ok()).isTrue();
+        String log = git("log").stdout();
+        assertThat(log).contains("Merge: ");
+        assertThat(log).contains("Author: alice <alice@example.com>");
     }
 
     // ---- helpers -----------------------------------------------------------
@@ -609,6 +688,11 @@ class GitExecutorTest {
     private ExecOutput git(String sub, String... args) {
         return executor.execute(sandbox,
                 new ParsedCommand("git", sub, List.of(args), "git " + sub));
+    }
+
+    private ExecOutput gitAs(CommitIdentity identity, String sub, String... args) {
+        return executor.execute(sandbox,
+                new ParsedCommand("git", sub, List.of(args), "git " + sub), identity);
     }
 
     private ExecOutput helper(String program, String... args) {
