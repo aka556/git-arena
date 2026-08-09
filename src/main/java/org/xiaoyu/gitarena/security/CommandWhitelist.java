@@ -4,7 +4,7 @@ import java.util.Set;
 
 /**
  * 命令白名单（CLAUDE.md §7 最高优先级安全约束）。
- * <p>只放行教学所需的 git 子集与少量非 git 辅助命令；白名单之外一律拒绝。
+ * <p>只放行教学所需的 git 子集与纯 Java 实现的安全终端内建命令；白名单之外一律拒绝。
  * M1 覆盖 {@code init/add/commit/log/status}；M2 增开 {@code branch/checkout/switch/merge/tag/rebase}；
  * M3 增开 {@code fetch/pull/push/remote}（远程模拟；remote 仅只读列表，不允许用户增删远程）。
  */
@@ -22,7 +22,13 @@ public final class CommandWhitelist {
      * （对齐 docs/level-spec.md §6 的 writeFile 语义）。执行以纯 Java Files API 实现，
      * 不经 shell、不拼进程（§7）。
      */
-    public static final Set<String> HELPERS = Set.of("touch", "echo");
+    public static final Set<String> SHELL_COMMANDS = Set.of(
+            "help", "pwd", "cd", "ls", "clear",
+            "cat", "head", "tail", "wc", "sort", "uniq", "grep",
+            "mkdir", "rmdir", "touch", "cp", "mv", "rm",
+            "find", "tree", "stat", "du",
+            "echo", "whoami", "date"
+    );
 
     private CommandWhitelist() {
     }
@@ -32,6 +38,6 @@ public final class CommandWhitelist {
     }
 
     public static boolean isHelper(String program) {
-        return HELPERS.contains(program);
+        return SHELL_COMMANDS.contains(program);
     }
 }
