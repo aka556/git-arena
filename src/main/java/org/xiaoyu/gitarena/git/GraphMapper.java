@@ -106,6 +106,16 @@ public class GraphMapper {
                     }
                 }
             }
+            // HEAD 必须也是遍历起点：游离 HEAD 上的提交只能从 HEAD 到达，
+            // 漏掉它图上就看不见刚在游离态做的提交（所见即真实仓库状态）
+            ObjectId headId = repo.resolve(Constants.HEAD);
+            if (headId != null) {
+                try {
+                    walk.markStart(walk.parseCommit(headId));
+                } catch (IOException ignore) {
+                    // HEAD 未指向 commit（新仓库等），跳过
+                }
+            }
             for (RevCommit c : walk) {
                 ordered.add(c);
             }

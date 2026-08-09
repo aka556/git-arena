@@ -182,6 +182,42 @@ class GraphMapperTest {
     }
 
     @Test
+    void commitReachableOnlyFromDetachedHeadIsIncluded() {
+        git("init");
+        commitFile("a.txt", "hello", "c1");
+        commitFile("b.txt", "world", "c2");
+        String c1Id = bySeq(mapper.map(sandbox), "C1").id();
+
+        git("checkout", c1Id); // 游离到 C1
+        commitFile("c.txt", "detached", "on detached"); // 仅 HEAD 可达的提交
+
+        GitGraph g = mapper.map(sandbox);
+        assertThat(g.commits()).hasSize(3); // 图必须包含游离态提交（所见即真实仓库状态）
+        assertThat(g.head().type()).isEqualTo("detached");
+        // 同秒兄弟提交的 seq 归属有歧义，改按 HEAD 指向定位游离提交
+        GitGraph.CommitNode detached = g.commits().stream()
+                .filter(c -> c.id().equals(g.head().ref()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("HEAD 指向的提交不在图里"));
+        assertThat(detached.message()).isEqualTo("on detached");
+        assertThat(detached.parents()).containsExactly(c1Id);
+    }
+
+    @Test
+    void movingHeadAwayDropsUnreachableDetachedCommit() {
+        git("init");
+        commitFile("a.txt", "hello", "c1");
+        String c1Id = bySeq(mapper.map(sandbox), "C1").id();
+
+        git("checkout", c1Id);
+        commitFile("b.txt", "detached", "on detached");
+        assertThat(mapper.map(sandbox).commits()).hasSize(2);
+
+        git("checkout", c1Id); // 离开游离提交 → 不可达，快照只含可达提交（幽灵化是前端动画的事）
+        assertThat(mapper.map(sandbox).commits()).hasSize(1);
+    }
+
+    @Test
     void mergeCommitHasTwoParents() throws Exception {
         String c2Short;
         String c3Short;
