@@ -10,5 +10,6 @@ public record CommandResponse(
         boolean ok,
         String stdout,
         String stderr,
-        GitGraph graph
+        GitGraph graph,
+        String cwd
 ) {}

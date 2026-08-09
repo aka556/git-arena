@@ -64,7 +64,7 @@ class GitExecutorTest {
     @Test
     void unsupportedProgramIsRejected() {
         // execute() 是 public 入口：即使解析层被绕过，也须挡住白名单外的程序
-        ParsedCommand cmd = new ParsedCommand("ls", null, List.of(), "ls");
+        ParsedCommand cmd = new ParsedCommand("bash", null, List.of(), "bash");
         assertThatThrownBy(() -> executor.execute(sandbox, cmd))
                 .isInstanceOf(CommandException.class)
                 .hasMessageContaining("不允许的命令");
@@ -131,15 +131,13 @@ class GitExecutorTest {
     @Test
     void echoRedirectWithoutTargetIsRejected() {
         assertThatThrownBy(() -> helper("echo", "hello", ">"))
-                .isInstanceOf(CommandException.class)
-                .hasMessageContaining("缺少目标文件");
+                .isInstanceOf(CommandException.class);
     }
 
     @Test
     void echoRedirectWithTooManyTargetsIsRejected() {
         assertThatThrownBy(() -> helper("echo", "hello", ">", "a.txt", "b.txt"))
-                .isInstanceOf(CommandException.class)
-                .hasMessageContaining("只能跟一个文件名");
+                .isInstanceOf(CommandException.class);
     }
 
     // ---- git add -----------------------------------------------------------
@@ -174,6 +172,23 @@ class GitExecutorTest {
         assertThat(git("status").stdout())
                 .contains("new file:   a.txt")
                 .contains("new file:   b.txt");
+    }
+
+    @Test
+    void addDotUsesTerminalCurrentDirectory() {
+        git("init");
+        helper("mkdir", "docs");
+        helper("touch", "docs/a.txt");
+        helper("touch", "root.txt");
+        helper("cd", "docs");
+
+        git("add", ".");
+
+        String status = git("status").stdout();
+        assertThat(status)
+                .contains("new file:   docs/a.txt")
+                .contains("root.txt");
+        assertThat(status).doesNotContain("new file:   root.txt");
     }
 
     @Test

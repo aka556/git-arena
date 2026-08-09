@@ -25,14 +25,13 @@ import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevObject;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.xiaoyu.gitarena.security.CommandException;
 import org.xiaoyu.gitarena.security.ParsedCommand;
 import org.xiaoyu.gitarena.security.PathGuard;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,18 +53,23 @@ public class GitExecutor {
     private static final String AUTHOR_EMAIL = "player@git-arena.local";
 
     private final PathGuard pathGuard;
+    private final SandboxShellExecutor shellExecutor;
+
+    @Autowired
+    public GitExecutor(PathGuard pathGuard, SandboxShellExecutor shellExecutor) {
+        this.pathGuard = pathGuard;
+        this.shellExecutor = shellExecutor;
+    }
 
     public GitExecutor(PathGuard pathGuard) {
-        this.pathGuard = pathGuard;
+        this(pathGuard, new SandboxShellExecutor(pathGuard));
     }
 
     public ExecOutput execute(SandboxRepo sandbox, ParsedCommand cmd) {
-        return switch (cmd.program()) {
-            case "git" -> runGit(sandbox, cmd);
-            case "touch" -> runTouch(sandbox, cmd.args());
-            case "echo" -> runEcho(sandbox, cmd.args());
-            default -> throw new CommandException("不允许的命令：" + cmd.program());
-        };
+        if (cmd.isGit()) {
+            return runGit(sandbox, cmd);
+        }
+        return shellExecutor.execute(sandbox, cmd);
     }
 
     // ---- git ---------------------------------------------------------------
@@ -129,15 +133,16 @@ public class GitExecutor {
         }
         var add = git.add();
         boolean any = false;
+        Path root = sandbox.root().toAbsolutePath().normalize();
+        Path cwd = sandbox.currentDirectory();
         for (String a : args) {
-            if (".".equals(a) || "-A".equals(a) || "--all".equals(a)) {
+            if ("-A".equals(a) || "--all".equals(a)) {
                 add.addFilepattern(".");
             } else {
                 // 校验路径合法且在沙盒内（防越权）；filepattern 用规范化后的相对形式
-                Path resolved = pathGuard.resolveInside(sandbox.root(), a);
-                String rel = sandbox.root().toAbsolutePath().normalize()
-                        .relativize(resolved).toString().replace('\\', '/');
-                add.addFilepattern(rel);
+                Path resolved = pathGuard.resolveShellPath(root, cwd, a);
+                String rel = root.relativize(resolved).toString().replace('\\', '/');
+                add.addFilepattern(rel.isEmpty() ? "." : rel);
             }
             any = true;
         }
@@ -614,56 +619,6 @@ public class GitExecutor {
         return ExecOutput.ok(sb.toString().stripTrailing());
     }
 
-    // ---- helpers (touch / echo) -------------------------------------------
-
-    private ExecOutput runTouch(SandboxRepo sandbox, List<String> args) {
-        if (args.isEmpty()) {
-            throw new CommandException("touch 需要文件名，例如：touch a.txt");
-        }
-        for (String a : args) {
-            Path p = pathGuard.resolveInside(sandbox.root(), a);
-            try {
-                Files.createDirectories(p.getParent());
-                if (!Files.exists(p)) {
-                    Files.createFile(p);
-                }
-            } catch (IOException e) {
-                throw new CommandException("无法创建文件：" + a);
-            }
-        }
-        return ExecOutput.ok("");
-    }
-
-    private ExecOutput runEcho(SandboxRepo sandbox, List<String> args) {
-        int redirect = indexOfRedirect(args);
-        if (redirect < 0) {
-            return ExecOutput.ok(String.join(" ", args));
-        }
-        boolean append = ">>".equals(args.get(redirect));
-        String text = String.join(" ", args.subList(0, redirect));
-        if (redirect + 1 >= args.size()) {
-            throw new CommandException("echo 重定向缺少目标文件");
-        }
-        if (redirect + 2 < args.size()) {
-            throw new CommandException("echo 重定向后只能跟一个文件名");
-        }
-        String target = args.get(redirect + 1);
-        Path p = pathGuard.resolveInside(sandbox.root(), target);
-        String content = text + System.lineSeparator();
-        try {
-            Files.createDirectories(p.getParent());
-            if (append) {
-                Files.writeString(p, content, StandardCharsets.UTF_8,
-                        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-            } else {
-                Files.writeString(p, content, StandardCharsets.UTF_8);
-            }
-        } catch (IOException e) {
-            throw new CommandException("无法写入文件：" + target);
-        }
-        return ExecOutput.ok("");
-    }
-
     // ---- utils -------------------------------------------------------------
 
     /** 第一个非选项参数（不以 - 开头），用于取分支/上游名。 */
@@ -688,16 +643,6 @@ public class GitExecutor {
             }
         }
         return positional;
-    }
-
-    private int indexOfRedirect(List<String> args) {
-        for (int i = 0; i < args.size(); i++) {
-            String a = args.get(i);
-            if (">".equals(a) || ">>".equals(a)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private String extractMessage(List<String> args) {

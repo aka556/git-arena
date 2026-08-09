@@ -57,7 +57,7 @@ public class CommandServiceImpl implements CommandService {
         commandLogService.log(CurrentUser.id(), sessionId, rawCommand,
                 parsed.isGit() ? parsed.subcommand() : parsed.program(),
                 true, output.ok(), output.stderr(), elapsedMs(startedAt));
-        return new CommandResponse(output.ok(), output.stdout(), output.stderr(), graph);
+        return new CommandResponse(output.ok(), output.stdout(), output.stderr(), graph, sandbox.displayCurrentDirectory());
     }
 
     private long elapsedMs(long startedAt) {
