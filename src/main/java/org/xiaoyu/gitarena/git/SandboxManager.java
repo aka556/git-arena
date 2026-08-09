@@ -110,6 +110,7 @@ public class SandboxManager {
         } catch (IOException e) {
             throw new IllegalStateException("无法重建沙盒目录", e);
         }
+        repo.resetCurrentDirectory();
         return repo;
     }
 

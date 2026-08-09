@@ -11,10 +11,12 @@ public final class SandboxRepo {
 
     private final String sessionId;
     private final Path root;
+    private Path currentDirectory;
 
     public SandboxRepo(String sessionId, Path root) {
         this.sessionId = sessionId;
-        this.root = root;
+        this.root = root.toAbsolutePath().normalize();
+        this.currentDirectory = this.root;
     }
 
     public String sessionId() {
@@ -23,6 +25,31 @@ public final class SandboxRepo {
 
     public Path root() {
         return root;
+    }
+
+    /** 安全终端当前目录；仅保存沙盒内路径，不影响 GitGraph 快照真相。 */
+    public synchronized Path currentDirectory() {
+        return currentDirectory;
+    }
+
+    public synchronized void changeDirectory(Path directory) {
+        Path normalized = directory.toAbsolutePath().normalize();
+        if (!normalized.startsWith(root)) {
+            throw new IllegalArgumentException("terminal cwd must stay inside sandbox");
+        }
+        currentDirectory = normalized;
+    }
+
+    public synchronized void resetCurrentDirectory() {
+        currentDirectory = root;
+    }
+
+    /** 面向终端显示的虚拟路径，不暴露宿主机临时目录。 */
+    public synchronized String displayCurrentDirectory() {
+        if (currentDirectory.equals(root)) {
+            return "~";
+        }
+        return "~/" + root.relativize(currentDirectory).toString().replace('\\', '/');
     }
 
     /**
