@@ -19,7 +19,7 @@ import org.xiaoyu.gitarena.service.ScoreService;
 
 import java.time.OffsetDateTime;
 
-/** 提示使用实现：唯一约束保证同一用户对同一提示只扣一次分。 */
+/** 提示使用实现：唯一约束保证同一用户对同一提示只记一次使用；使用提示不扣分（2026-08-09 起）。 */
 @Service
 @RequiredArgsConstructor
 public class HintServiceImpl implements HintService {
@@ -62,16 +62,15 @@ public class HintServiceImpl implements HintService {
             throw new CommandException("这条提示已经使用过了");
         }
 
-        int cost = hint.getCostPoints() == null ? 0 : Math.max(hint.getCostPoints(), 0);
-        scoreService.award(userId, "hint_penalty", String.valueOf(hintId), -cost);
+        // 提示不再扣分：只记使用（hints_used 供进度展示），不写 hint_penalty 流水
         int hintsUsed = incrementProgress(userId, levelId);
         int totalPoints = scoreService.me(userId).totalPoints();
         return new HintDtos.UseResponse(
                 hint.getId(),
                 hint.getTier() == null ? 1 : hint.getTier(),
                 hint.getBody(),
-                cost,
-                -cost,
+                0,
+                0,
                 hintsUsed,
                 totalPoints);
     }

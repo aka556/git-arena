@@ -102,7 +102,7 @@ public class LevelServiceImpl implements LevelService {
                             row.getId(),
                             row.getTier() == null ? 1 : row.getTier(),
                             row.getBody(),
-                            row.getCostPoints() == null ? 0 : row.getCostPoints(),
+                            0, // 使用提示不扣分：展示层不再暴露 cost_points
                             usedIds.contains(row.getId())));
                 }
                 return out;
@@ -117,7 +117,7 @@ public class LevelServiceImpl implements LevelService {
                         null,
                         h.tier() == null ? 1 : h.tier(),
                         h.body(),
-                        h.costPoints() == null ? 0 : h.costPoints(),
+                        0, // 使用提示不扣分
                         false));
             }
         }

@@ -85,9 +85,10 @@ class EngagementIntegrationTest {
 
         HintDtos.UseResponse response = hintService.use(userId, "resolve-conflict", hint.getId());
 
-        assertThat(response.pointsCharged()).isEqualTo(-hint.getCostPoints());
+        // 使用提示不扣分：只记使用，不产生 hint_penalty 流水
+        assertThat(response.pointsCharged()).isZero();
         assertThat(response.hintsUsed()).isEqualTo(1);
-        assertThat(scoreService.me(userId).totalPoints()).isEqualTo(-hint.getCostPoints());
+        assertThat(scoreService.me(userId).totalPoints()).isZero();
         assertThat(usageMapper.selectCount(new LambdaQueryWrapper<UserHintUsageEntity>()
                 .eq(UserHintUsageEntity::getUserId, userId)
                 .eq(UserHintUsageEntity::getHintId, hint.getId()))).isEqualTo(1);

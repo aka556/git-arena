@@ -23,6 +23,6 @@ public class LevelHintEntity {
     /** 提示层级 1..n（1=最含蓄）。 */
     private Integer tier;
     private String body;
-    /** 使用后扣分，写入 score_events(hint_penalty)。 */
+    /** 关卡文件映射的历史字段；使用提示已不扣分（2026-08-09 起），不再写 hint_penalty 流水。 */
     private Integer costPoints;
 }
