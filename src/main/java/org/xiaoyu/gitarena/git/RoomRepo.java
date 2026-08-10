@@ -61,11 +61,22 @@ public class RoomRepo {
 
     /** 建立房间的裸 origin，并预置 main 上一个 base 提交（成员克隆后即可分支/提交）。 */
     public void createRoomOrigin(Path bareDir) {
+        createRoomOrigin(bareDir, true);
+    }
+
+    /**
+     * 建立房间的裸 origin。{@code seedBase=false} 时只建空裸仓库不写 base 提交——
+     * 供场景关卡房间使用：初始图由 {@code LevelBuilder.buildBare} 按关卡 spec 物化。
+     */
+    public void createRoomOrigin(Path bareDir, boolean seedBase) {
         try (Git ignored = Git.init().setBare(true).setDirectory(bareDir.toFile())
                 .setInitialBranch("main").call()) {
             // 建仓即可，下面用 in-core 写入 base 提交
         } catch (GitAPIException e) {
             throw new CommandException("创建房间仓库失败：" + e.getMessage());
+        }
+        if (!seedBase) {
+            return;
         }
         try (Repository repo = openBare(bareDir); ObjectInserter inserter = repo.newObjectInserter()) {
             DirCache dc = DirCache.newInCore();

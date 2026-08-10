@@ -13,12 +13,17 @@ import org.xiaoyu.gitarena.domain.collab.Room;
 import org.xiaoyu.gitarena.domain.dto.CommandResponse;
 import org.xiaoyu.gitarena.domain.dto.RoomJoinResponse;
 import org.xiaoyu.gitarena.domain.dto.RoomRequests;
+import org.xiaoyu.gitarena.domain.dto.RoomScenarioView;
 import org.xiaoyu.gitarena.domain.dto.RoomView;
+import org.xiaoyu.gitarena.domain.dto.ValidateResponse;
 import org.xiaoyu.gitarena.domain.entity.PullRequestEntity;
 import org.xiaoyu.gitarena.domain.entity.RoomEntity;
 import org.xiaoyu.gitarena.domain.entity.RoomMemberEntity;
 import org.xiaoyu.gitarena.domain.entity.SandboxRepoEntity;
 import org.xiaoyu.gitarena.domain.graph.GitGraph;
+import org.xiaoyu.gitarena.domain.level.LevelFile;
+import org.xiaoyu.gitarena.git.LevelBuilder;
+import org.xiaoyu.gitarena.git.RepoInspector;
 import org.xiaoyu.gitarena.git.RoomRepo;
 import org.xiaoyu.gitarena.git.SandboxManager;
 import org.xiaoyu.gitarena.git.SandboxRepo;
@@ -31,10 +36,15 @@ import org.xiaoyu.gitarena.security.CurrentUser;
 import org.xiaoyu.gitarena.service.AchievementService;
 import org.xiaoyu.gitarena.service.CollabService;
 import org.xiaoyu.gitarena.service.CommandService;
+import org.xiaoyu.gitarena.service.GoalMatcher;
 import org.xiaoyu.gitarena.service.GraphService;
+import org.xiaoyu.gitarena.service.LevelCatalog;
 import org.xiaoyu.gitarena.service.LevelRegistry;
+import org.xiaoyu.gitarena.service.MatchResult;
 import org.xiaoyu.gitarena.service.PrReviewService;
+import org.xiaoyu.gitarena.service.ProgressService;
 import org.xiaoyu.gitarena.service.ScoreService;
+import org.xiaoyu.gitarena.service.SpecGraphConverter;
 
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -78,6 +88,12 @@ public class CollabServiceImpl implements CollabService {
     private final AchievementService achievementService;
     private final MaintenanceProperties maintenanceProperties;
     private final PrReviewService prReviewService;
+    private final LevelCatalog levelCatalog;
+    private final LevelBuilder levelBuilder;
+    private final GoalMatcher goalMatcher;
+    private final RepoInspector repoInspector;
+    private final SpecGraphConverter specGraphConverter;
+    private final ProgressService progressService;
     private final JdbcTemplate jdbc;
 
     private final Map<String, Room> roomsById = new ConcurrentHashMap<>();
@@ -125,7 +141,12 @@ public class CollabServiceImpl implements CollabService {
         String roomId = UUID.randomUUID().toString();
         String joinCode = roomId.substring(0, 6);
         Path origin = sandboxManager.roomsBaseDir().resolve(roomId + ".git");
-        roomRepo.createRoomOrigin(origin);
+        // 场景关卡房间：origin 初始图由关卡 spec 物化（不写默认 base 提交），让所有成员克隆到同一起点
+        LevelFile scenario = scenarioLevel(request.scenarioLevelSlug());
+        roomRepo.createRoomOrigin(origin, scenario == null);
+        if (scenario != null) {
+            levelBuilder.buildBare(scenario.initial(), origin);
+        }
 
         // 落库：先写 room_origin 沙盒台账，再写 rooms（origin_sandbox_id 外键）
         SandboxRepoEntity originRow = insertSandboxRow(
@@ -334,6 +355,70 @@ public class CollabServiceImpl implements CollabService {
     }
 
     // ---- 内部 ----
+
+    /**
+     * 取房间场景关卡（必须是 collab 模式）；slug 为空返回 null（自由协作房间）。
+     * 非 collab 关卡开房会误把单人 spec 当共享 origin 用，故 fail-closed 拒绝。
+     */
+    private LevelFile scenarioLevel(String slug) {
+        if (slug == null || slug.isBlank()) {
+            return null;
+        }
+        LevelFile level = levelCatalog.get(slug);
+        if (level.meta() == null || !"collab".equals(level.meta().mode())) {
+            throw new CommandException("该关卡不是协作关卡，不能作为房间场景：" + slug);
+        }
+        return level;
+    }
+
+    @Override
+    public RoomScenarioView scenario(String roomId) {
+        Room room = requireRoom(roomId);
+        LevelFile level = scenarioLevel(room.getScenarioLevelSlug());
+        if (level == null) {
+            return null;
+        }
+        return new RoomScenarioView(
+                level.meta().slug(),
+                level.meta().title(),
+                level.meta().description(),
+                level.meta().difficulty() == null ? 1 : level.meta().difficulty(),
+                specGraphConverter.fromGoal(level.goal().graph()));
+    }
+
+    @Override
+    public ValidateResponse validateScenario(String roomId, String memberId) {
+        Long userId = CurrentUser.require();
+        Room room = requireRoom(roomId);
+        LevelFile level = scenarioLevel(room.getScenarioLevelSlug());
+        if (level == null) {
+            throw new CommandException("该房间没有场景关卡");
+        }
+        RoomMemberEntity memberRow = requireMemberRow(roomId, memberId);
+        if (!userId.equals(memberRow.getUserId())) {
+            throw new CommandException("不能以他人身份校验");
+        }
+        SandboxRepo sandbox = sandboxManager.require(sessionIdOf(memberRow));
+        GitGraph snapshot = graphService.readGraph(sandbox);
+        Long roomRowId = requireRoomRow(roomId).getId();
+
+        MatchResult result = goalMatcher.match(
+                snapshot,
+                level.goal(),
+                path -> repoInspector.fileAtHead(sandbox, path),
+                // prMerged 断言查本房间的 PR（number 为空=任意 PR 已合并）
+                number -> {
+                    LambdaQueryWrapper<PullRequestEntity> q = new LambdaQueryWrapper<PullRequestEntity>()
+                            .eq(PullRequestEntity::getRoomId, roomRowId)
+                            .eq(PullRequestEntity::getStatus, PullRequest.STATUS_MERGED);
+                    if (number != null) {
+                        q.eq(PullRequestEntity::getNumber, number);
+                    }
+                    return pullRequestMapper.selectCount(q) > 0;
+                });
+        progressService.record(userId, level.meta().slug(), result.passed());
+        return new ValidateResponse(result.passed(), result.reasons());
+    }
 
     private Room requireRoom(String roomId) {
         Room room = roomsById.get(roomId);

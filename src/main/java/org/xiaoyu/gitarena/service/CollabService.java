@@ -31,4 +31,10 @@ public interface CollabService {
     RoomView openPullRequest(String roomId, RoomRequests.OpenPr request);
 
     RoomView mergePullRequest(String roomId, int number, String memberId);
+
+    /** 房间场景关卡（建房时选定的 collab 关卡）；房间无场景时返回 null。 */
+    org.xiaoyu.gitarena.domain.dto.RoomScenarioView scenario(String roomId);
+
+    /** 成员对自己的克隆沙盒跑场景关卡校验（prMerged 断言查本房间 PR）；通过则记进度。 */
+    org.xiaoyu.gitarena.domain.dto.ValidateResponse validateScenario(String roomId, String memberId);
 }

@@ -14,7 +14,9 @@ import org.xiaoyu.gitarena.domain.dto.PrDiff;
 import org.xiaoyu.gitarena.domain.dto.PrReviewDtos;
 import org.xiaoyu.gitarena.domain.dto.RoomJoinResponse;
 import org.xiaoyu.gitarena.domain.dto.RoomRequests;
+import org.xiaoyu.gitarena.domain.dto.RoomScenarioView;
 import org.xiaoyu.gitarena.domain.dto.RoomView;
+import org.xiaoyu.gitarena.domain.dto.ValidateResponse;
 import org.xiaoyu.gitarena.domain.graph.GitGraph;
 import org.xiaoyu.gitarena.service.CollabService;
 import org.xiaoyu.gitarena.service.PrReviewService;
@@ -49,6 +51,19 @@ public class RoomController {
     @GetMapping("/{roomId}/origin-graph")
     public Result<GitGraph> originGraph(@PathVariable String roomId) {
         return Result.ok(collabService.originGraph(roomId));
+    }
+
+    /** 房间场景关卡（目标说明 + 目标图）；无场景返回 data=null。 */
+    @GetMapping("/{roomId}/scenario")
+    public Result<RoomScenarioView> scenario(@PathVariable String roomId) {
+        return Result.ok(collabService.scenario(roomId));
+    }
+
+    /** 成员对自己的克隆跑场景关卡校验（prMerged 查本房 PR）。 */
+    @PostMapping("/{roomId}/members/{memberId}/validate")
+    public Result<ValidateResponse> validateScenario(@PathVariable String roomId,
+                                                     @PathVariable String memberId) {
+        return Result.ok(collabService.validateScenario(roomId, memberId));
     }
 
     /** 成员命令（走统一命令链路 §3）。 */
