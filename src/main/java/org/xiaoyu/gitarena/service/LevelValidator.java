@@ -47,9 +47,28 @@ public class LevelValidator {
         } else {
             problems.add("缺少 goal");
         }
+        if (level.meta() != null && "collab".equals(level.meta().mode()) && level.initial() != null) {
+            validateCollabInitial(level.initial(), problems);
+        }
 
         if (!problems.isEmpty()) {
             throw new LevelException(slug, problems);
+        }
+    }
+
+    /**
+     * collab 关卡的 initial 描述的是房间<b>共享裸 origin</b> 本身：
+     * 不得再声明 remotes（origin 即远程）、workingDir（裸仓库无工作区），HEAD 须指向分支。
+     */
+    private void validateCollabInitial(LevelFile.InitialSpec initial, List<String> problems) {
+        if (initial.remotes() != null && !initial.remotes().isEmpty()) {
+            problems.add("collab 关卡的 initial 不能声明 remotes（房间共享 origin 即远程）");
+        }
+        if (initial.workingDir() != null) {
+            problems.add("collab 关卡的 initial 不能声明 workingDir（裸仓库无工作区）");
+        }
+        if (initial.head() != null && !"branch".equals(initial.head().type())) {
+            problems.add("collab 关卡的 initial HEAD 必须指向分支");
         }
     }
 
@@ -179,15 +198,15 @@ public class LevelValidator {
     /**
      * 校验 remotes（M3）：远程名唯一、远程分支名唯一、target 为存在的 seq；
      * initial 侧还校验 tracked（缺省=target；字面量 "none" 表示本地不知道；否则须为存在的 seq）。
-     * 当前引擎仅支持单个远程（origin），多远程 fail-closed。
+     * 引擎支持至多 2 个远程（origin + upstream 的 fork 工作流，docs/level-spec.md §3.3），超出 fail-closed。
      */
     private void validateRemotes(List<LevelFile.Remote> remotes, Set<String> seqs, boolean isInitial,
                                  String ctx, List<String> problems) {
         if (remotes == null || remotes.isEmpty()) {
             return;
         }
-        if (remotes.size() > 1) {
-            problems.add(ctx + " 目前仅支持单个远程（origin），声明了 " + remotes.size() + " 个");
+        if (remotes.size() > 2) {
+            problems.add(ctx + " 最多支持 2 个远程（origin + upstream），声明了 " + remotes.size() + " 个");
         }
         Set<String> remoteNames = new HashSet<>();
         for (LevelFile.Remote r : remotes) {

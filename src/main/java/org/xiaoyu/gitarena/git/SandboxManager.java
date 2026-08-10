@@ -104,7 +104,7 @@ public class SandboxManager {
     public SandboxRepo reset(String sessionId) {
         SandboxRepo repo = require(sessionId);
         deleteQuietly(repo.root());
-        deleteQuietly(repo.originPath());
+        deleteCompanions(repo.root());
         try {
             Files.createDirectories(repo.root());
         } catch (IOException e) {
@@ -151,7 +151,7 @@ public class SandboxManager {
             return;
         }
         deleteQuietly(dir);
-        deleteQuietly(dir.resolveSibling(dir.getFileName() + ".origin.git"));
+        deleteCompanions(dir);
         forget(sandboxKey);
     }
 
@@ -179,7 +179,7 @@ public class SandboxManager {
             lastActiveAt.remove(sessionId);
             if (repo != null) {
                 deleteQuietly(repo.root());
-                deleteQuietly(repo.originPath());
+                deleteCompanions(repo.root());
             }
         }
         if (!stale.isEmpty()) {
@@ -194,6 +194,20 @@ public class SandboxManager {
      */
     public void markLedgerManaged(String sandboxKey) {
         ledgerManaged.add(sandboxKey);
+    }
+
+    /**
+     * 即用即弃：立刻删除该沙盒及其伴生裸仓并摘除登记。
+     * 供关卡编辑器自证闭环这类"跑完就不要了"的一次性沙盒使用，避免堆到回收作业才清（§7.7）。
+     */
+    public void discard(String sessionId) {
+        SandboxRepo repo = repos.remove(sessionId);
+        lastActiveAt.remove(sessionId);
+        ledgerManaged.remove(sessionId);
+        if (repo != null) {
+            deleteQuietly(repo.root());
+            deleteCompanions(repo.root());
+        }
     }
 
     /** 当前存活的会话沙盒数（回收作业与测试观测用）。 */
@@ -216,11 +230,31 @@ public class SandboxManager {
     void cleanupAll() {
         repos.values().forEach(r -> {
             deleteQuietly(r.root());
-            deleteQuietly(r.originPath());
+            deleteCompanions(r.root());
         });
         repos.clear();
         lastActiveAt.clear();
         ledgerManaged.clear();
+    }
+
+    /** 删除沙盒的全部伴生裸仓（origin 与多远程 .remote-<name>.git），防磁盘泄漏（§7.7）。 */
+    private void deleteCompanions(Path root) {
+        if (root == null) {
+            return;
+        }
+        deleteQuietly(root.resolveSibling(root.getFileName() + ".origin.git"));
+        Path parent = root.toAbsolutePath().getParent();
+        if (parent == null || !Files.isDirectory(parent)) {
+            return;
+        }
+        String prefix = root.getFileName() + ".remote-";
+        try (var stream = Files.list(parent)) {
+            stream.filter(p -> p.getFileName().toString().startsWith(prefix)
+                            && p.getFileName().toString().endsWith(".git"))
+                    .forEach(this::deleteQuietly);
+        } catch (IOException e) {
+            log.warn("failed to scan companion remotes of {}: {}", root, e.getMessage());
+        }
     }
 
     /**

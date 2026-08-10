@@ -60,6 +60,20 @@ public final class SandboxRepo {
         return root.resolveSibling(root.getFileName() + ".origin.git");
     }
 
+    /**
+     * 任意命名远程的裸仓库目录（fork 工作流的 upstream 等）；origin 沿用既有布局。
+     * 远程名来自关卡 spec（已过引用名校验），此处再收一道防目录逃逸。
+     */
+    public Path remotePath(String name) {
+        if ("origin".equals(name)) {
+            return originPath();
+        }
+        if (name == null || !name.matches("[A-Za-z0-9_-]{1,32}")) {
+            throw new IllegalArgumentException("illegal remote name: " + name);
+        }
+        return root.resolveSibling(root.getFileName() + ".remote-" + name + ".git");
+    }
+
     /** 是否已 {@code git init}（存在 .git 目录）。 */
     public boolean isInitialized() {
         return Files.isDirectory(root.resolve(".git"));

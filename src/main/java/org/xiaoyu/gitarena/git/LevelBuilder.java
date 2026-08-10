@@ -80,6 +80,24 @@ public class LevelBuilder {
         }
     }
 
+    /**
+     * 把 InitialSpec 物化进一个<b>已存在的裸仓库</b>（协作房间的共享 origin）：只造提交与引用，
+     * 无工作区。collab 关卡的 initial 描述的就是这份共享仓库（LevelValidator 保证其无 remotes/workingDir）。
+     */
+    public void buildBare(LevelFile.InitialSpec initial, Path bareDir) {
+        try (Repository repo = new org.eclipse.jgit.storage.file.FileRepositoryBuilder()
+                .setGitDir(bareDir.toFile()).setBare().build()) {
+            List<LevelFile.Commit> commits = nullToEmpty(initial.commits());
+            if (commits.isEmpty()) {
+                return;
+            }
+            Map<String, ObjectId> seqToOid = insertCommits(repo, commits);
+            writeRefs(repo, initial, seqToOid);
+        } catch (IOException e) {
+            throw new CommandException("房间关卡初始仓库构建失败：" + e.getMessage());
+        }
+    }
+
     /** 逐个（数组序=拓扑序）造提交，返回 seq → 提交 ObjectId。 */
     private Map<String, ObjectId> insertCommits(Repository repo, List<LevelFile.Commit> commits) throws IOException {
         Map<String, ObjectId> seqToOid = new LinkedHashMap<>();
@@ -197,13 +215,13 @@ public class LevelBuilder {
         if (remotes.isEmpty()) {
             return;
         }
-        if (remotes.size() > 1) {
-            // 多远程（fork 工作流的 upstream）属 M3 后续阶段；fail-closed 而非静默忽略
-            throw new IOException("当前引擎仅支持单个远程（origin），关卡声明了 " + remotes.size() + " 个");
+        if (remotes.size() > 2) {
+            // schema 上限即 2（origin + upstream 的 fork 工作流）；fail-closed 而非静默忽略
+            throw new IOException("引擎最多支持 2 个远程（origin + upstream），关卡声明了 " + remotes.size() + " 个");
         }
         Repository repo = git.getRepository();
         for (LevelFile.Remote remote : remotes) {
-            Path bare = sandbox.originPath();
+            Path bare = sandbox.remotePath(remote.name());
             try (Git ignored = Git.init().setBare(true).setDirectory(bare.toFile())
                     .setInitialBranch("main").call()) {
                 // 建仓即可，后续用 push 灌对象
@@ -237,18 +255,23 @@ public class LevelBuilder {
                 // tracking：缺省=target（已 fetch）；显式 null（spec 里写 "tracked": null 无法与缺省区分，
                 // Jackson 均为 null）→ 约定用字面量 "none" 表示"本地不知道"
                 String tracked = rb.tracked() == null ? rb.target() : rb.tracked();
-                if (!"none".equals(tracked)) {
+                RefUpdate tr = repo.updateRef("refs/remotes/" + remote.name() + "/" + rb.name());
+                if ("none".equals(tracked)) {
+                    // 上面的 push 会按 remote.<name>.fetch 顺带建出 tracking 引用，
+                    // "本地还不知道该远程分支"必须显式删掉它，否则关卡一进门就已是已 fetch 状态
+                    tr.setForceUpdate(true);
+                    tr.delete();
+                } else {
                     ObjectId trackedOid = seqToOid.get(tracked);
                     if (trackedOid == null) {
                         throw new IOException("tracked 指向不存在的提交：" + tracked);
                     }
-                    RefUpdate tr = repo.updateRef("refs/remotes/" + remote.name() + "/" + rb.name());
                     tr.setNewObjectId(trackedOid);
                     tr.setForceUpdate(true);
                     tr.update();
                 }
-                // 本地同名分支挂上游（git pull 需要）
-                if (repo.findRef(Constants.R_HEADS + rb.name()) != null) {
+                // 本地同名分支挂上游（git pull 需要）；多远程时只有 origin 挂，仿真实 clone 语义
+                if ("origin".equals(remote.name()) && repo.findRef(Constants.R_HEADS + rb.name()) != null) {
                     config.setString("branch", rb.name(), "remote", remote.name());
                     config.setString("branch", rb.name(), "merge", Constants.R_HEADS + rb.name());
                 }

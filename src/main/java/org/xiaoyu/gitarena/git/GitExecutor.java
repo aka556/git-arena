@@ -637,6 +637,7 @@ public class GitExecutor {
 
     private ExecOutput gitPush(Git git, List<String> args) throws GitAPIException, IOException {
         Repository repo = git.getRepository();
+        boolean force = args.contains("--force") || args.contains("-f") || args.contains("--force-with-lease");
         List<String> positional = positionalArgs(args);
         String remote = requireRemote(repo, positional.isEmpty() ? "origin" : positional.get(0));
         String branch = positional.size() > 1 ? positional.get(1) : repo.getBranch();
@@ -644,9 +645,11 @@ public class GitExecutor {
             throw new CommandException("要推送的分支不存在：" + branch
                     + (branch == null ? "" : "（detached HEAD 请先切回分支）"));
         }
-        // 非强制 refspec：非快进推送会被拒绝——这正是 push-rejected 关卡的考点
+        // 非强制 refspec：非快进推送会被拒绝——这正是 push-rejected 关卡的考点；
+        // --force / --force-with-lease 显式覆盖（rebase 协作流的强推场景）
         var spec = new org.eclipse.jgit.transport.RefSpec(
-                Constants.R_HEADS + branch + ":" + Constants.R_HEADS + branch);
+                Constants.R_HEADS + branch + ":" + Constants.R_HEADS + branch)
+                .setForceUpdate(force);
         Iterable<org.eclipse.jgit.transport.PushResult> results =
                 git.push().setRemote(remote).setRefSpecs(spec).call();
 
@@ -671,7 +674,9 @@ public class GitExecutor {
                 }
             }
         }
-        return ExecOutput.ok("To " + remote + "\n   " + branch + " -> " + branch);
+        String line = force ? " + " + branch + " -> " + branch + " (forced update)"
+                : "   " + branch + " -> " + branch;
+        return ExecOutput.ok("To " + remote + "\n" + line);
     }
 
     private ExecOutput gitRemote(Git git, List<String> args) {
