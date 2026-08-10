@@ -1,0 +1,51 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "pr-merge-conflict",
+    "title": "协作冲突：救活一个 PR",
+    "description": "房间关卡：共享仓库的 main 已包含 alice 的改动（C2），而 bob-feature 分支（C3）对同一文件做了不同修改——这个 PR 自动合并会冲突。像真实团队一样救活它：本地拉取两侧分支，git merge origin/bob-feature 触发冲突，手工合并双方内容后提交并推送 main，最后在房间里把这个 PR 合并掉。",
+    "category": "pr",
+    "difficulty": 5,
+    "mode": "collab",
+    "orderIndex": 4
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "greeting.txt": "hello\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "alice change", "files": { "greeting.txt": "hello alice\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "bob change", "files": { "greeting.txt": "hello bob\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "bob-feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C1"] },
+        { "seq": "C4", "parents": ["C2", "C3"] }
+      ],
+      "branches": [ { "name": "main", "target": "C4" } ],
+      "head": { "type": "branch", "ref": "main" }
+    },
+    "match": {
+      "allowExtraBranches": true
+    },
+    "assertions": [
+      { "type": "fileAtHeadNotContains", "path": "greeting.txt", "pattern": "<<<<<<<" },
+      { "type": "fileAtHeadContains", "path": "greeting.txt", "pattern": "alice" },
+      { "type": "fileAtHeadContains", "path": "greeting.txt", "pattern": "bob" },
+      { "type": "prMerged" }
+    ]
+  },
+  "hints": [
+    { "tier": 1, "body": "先在房间里对 bob-feature → main 开一个 PR，试着合并——它会因冲突被拒", "costPoints": 0 },
+    { "tier": 2, "body": "回到你的克隆：git fetch 拿到两侧分支，站在 main 上 git merge origin/bob-feature 触发冲突", "costPoints": 0 },
+    { "tier": 3, "body": "编辑 greeting.txt 保留双方内容，git add + git commit 完成合并，再 git push origin main", "costPoints": 0 },
+    { "tier": 4, "body": "main 已包含 bob-feature 后，房间里的 PR 就能顺利合并了", "costPoints": 0 }
+  ]
+}

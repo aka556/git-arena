@@ -1,0 +1,60 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "pr-create",
+    "title": "发起 Pull Request",
+    "description": "你在 feature 分支上完成了一个提交 C2。PR 的底层其实就是「远程上存在你的分支」：把 feature 推送到 origin（git push -u origin feature），远程一旦有了这个分支，就可以基于它发起 Pull Request 等待评审。",
+    "category": "pr",
+    "difficulty": 4,
+    "mode": "solo",
+    "orderIndex": 2
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "app.txt": "v1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "feature work", "files": { "feature.txt": "done\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C1" },
+      { "name": "feature", "target": "C2" }
+    ],
+    "head": { "type": "branch", "ref": "feature" },
+    "remotes": [
+      { "name": "origin", "branches": [ { "name": "main", "target": "C1", "tracked": "C1" } ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C1" },
+        { "name": "feature", "target": "C2" }
+      ],
+      "head": { "type": "branch", "ref": "feature" },
+      "remotes": [
+        { "name": "origin", "branches": [
+          { "name": "main", "target": "C1" },
+          { "name": "feature", "target": "C2" }
+        ] }
+      ]
+    },
+    "assertions": [
+      { "type": "branchExists", "name": "feature" },
+      { "type": "branchPushed", "name": "feature" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git push origin feature" }
+    ],
+    "notes": "push 会在 origin 上创建同名分支并更新本地的 origin/feature 追踪引用——PR 平台看到的「可合并分支」就是它。"
+  },
+  "hints": [
+    { "tier": 1, "body": "PR 的前提：远程仓库上得先有你的分支", "costPoints": 0 },
+    { "tier": 2, "body": "push 可以指定远程与分支：git push <远程> <分支>", "costPoints": 0 },
+    { "tier": 3, "body": "git push origin feature（-u 可选，用于设置上游）", "costPoints": 0 }
+  ]
+}

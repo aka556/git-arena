@@ -73,6 +73,11 @@ class LevelSelfCheckTest {
                     .as("关卡 [%s] 初始状态不应直接通关", slug)
                     .isFalse();
 
+            // collab 关卡需多人交互（PR/房间），无法单进程重放参考解，由协作集成测验证通关路径
+            if ("collab".equals(level.meta().mode())) {
+                continue;
+            }
+
             // 质量门 2：参考解通关
             assertThat(level.solution())
                     .as("官方关卡 [%s] 必须提供参考解（自证闭环需要）", slug)

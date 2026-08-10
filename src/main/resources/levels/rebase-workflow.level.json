@@ -1,0 +1,65 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "rebase-workflow",
+    "title": "变基协作流：整理后强推",
+    "description": "你的 PR 分支 feature（C3）已经推到了 origin，但 main 在评审期间前进到了 C2。团队要求线性历史：先 git rebase main 把 feature 嫁接到最新 main 之后（生成新提交 C3'），再用 git push --force-with-lease origin feature 更新远程分支。变基改写了历史，普通 push 会被拒绝——这正是需要受控强推的场景。",
+    "category": "pr",
+    "difficulty": 5,
+    "mode": "solo",
+    "orderIndex": 3
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "app.txt": "v1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "main advanced", "files": { "main.txt": "hotfix\n" } },
+      { "seq": "C3", "parents": ["C1"], "message": "feature work", "files": { "feature.txt": "done\n" } }
+    ],
+    "branches": [
+      { "name": "main", "target": "C2" },
+      { "name": "feature", "target": "C3" }
+    ],
+    "head": { "type": "branch", "ref": "feature" },
+    "remotes": [
+      { "name": "origin", "branches": [
+        { "name": "main", "target": "C2", "tracked": "C2" },
+        { "name": "feature", "target": "C3", "tracked": "C3" }
+      ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C4", "parents": ["C2"] }
+      ],
+      "branches": [
+        { "name": "main", "target": "C2" },
+        { "name": "feature", "target": "C4" }
+      ],
+      "head": { "type": "branch", "ref": "feature" },
+      "remotes": [
+        { "name": "origin", "branches": [
+          { "name": "main", "target": "C2" },
+          { "name": "feature", "target": "C4" }
+        ] }
+      ]
+    },
+    "assertions": [
+      { "type": "branchPushed", "name": "feature" }
+    ]
+  },
+  "solution": {
+    "steps": [
+      { "run": "git rebase main" },
+      { "run": "git push --force-with-lease origin feature" }
+    ],
+    "notes": "rebase 产生了内容相同但 hash 不同的新提交（原 C3 变得不可达），远程 feature 还指着旧提交，非快进 push 会被拒；--force-with-lease 是团队协作里受控强推的规范做法。"
+  },
+  "hints": [
+    { "tier": 1, "body": "先把 feature 嫁接到最新的 main 之后：站在 feature 上执行变基", "costPoints": 0 },
+    { "tier": 2, "body": "变基后直接 git push 会被拒绝（非快进）——历史被改写了", "costPoints": 0 },
+    { "tier": 3, "body": "git push --force-with-lease origin feature 完成受控强推", "costPoints": 0 }
+  ]
+}

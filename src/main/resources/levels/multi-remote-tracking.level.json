@@ -1,0 +1,49 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "multi-remote-tracking",
+    "title": "双远程：追踪上游",
+    "description": "Fork 工作流里你有两个远程：origin 是你的 fork，upstream 是上游主仓库。上游的 main 已经前进到 C2，但你本地还不知道。用 git fetch upstream 拉取上游的最新状态（只更新追踪分支 upstream/main，不动你的本地 main，也不推送 origin）。",
+    "category": "pr",
+    "difficulty": 4,
+    "mode": "solo",
+    "orderIndex": 1
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "base", "files": { "readme.txt": "base\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "upstream work", "files": { "upstream.txt": "new\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C1" } ],
+    "head": { "type": "branch", "ref": "main" },
+    "remotes": [
+      { "name": "origin", "branches": [ { "name": "main", "target": "C1", "tracked": "C1" } ] },
+      { "name": "upstream", "branches": [ { "name": "main", "target": "C2", "tracked": "none" } ] }
+    ]
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] }
+      ],
+      "branches": [ { "name": "main", "target": "C1" } ],
+      "head": { "type": "branch", "ref": "main" },
+      "remotes": [
+        { "name": "origin", "branches": [ { "name": "main", "target": "C1" } ] },
+        { "name": "upstream", "branches": [ { "name": "main", "target": "C2" } ] }
+      ]
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git fetch upstream" }
+    ],
+    "notes": "fetch 只更新 remote-tracking 引用（upstream/main），本地分支与 origin 都不受影响——这是 fork 工作流同步上游的第一步。"
+  },
+  "hints": [
+    { "tier": 1, "body": "git remote -v 看看你有哪几个远程", "costPoints": 0 },
+    { "tier": 2, "body": "fetch 可以指定远程名：git fetch <远程名>", "costPoints": 0 },
+    { "tier": 3, "body": "git fetch upstream 即可——注意本地 main 和 origin 都不需要动", "costPoints": 0 }
+  ]
+}
