@@ -8,11 +8,20 @@ import java.util.List;
  */
 public class LevelException extends RuntimeException {
 
+    /** 逐条问题（编辑器直接展示；单条构造时为空列表）。 */
+    private final List<String> problems;
+
     public LevelException(String message) {
         super(message);
+        this.problems = List.of(message);
     }
 
     public LevelException(String slug, List<String> problems) {
         super("关卡 [" + slug + "] 不合契约：\n  - " + String.join("\n  - ", problems));
+        this.problems = List.copyOf(problems);
+    }
+
+    public List<String> problems() {
+        return problems;
     }
 }

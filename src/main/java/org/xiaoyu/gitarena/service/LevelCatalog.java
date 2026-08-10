@@ -77,6 +77,11 @@ public class LevelCatalog {
         return List.copyOf(bySlug.values());
     }
 
+    /** 该 slug 是否为官方关卡（自定义关卡不得顶替官方内容，见 LevelSource）。 */
+    public boolean has(String slug) {
+        return bySlug.containsKey(slug);
+    }
+
     public LevelFile get(String slug) {
         LevelFile level = bySlug.get(slug);
         if (level == null) {

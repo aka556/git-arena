@@ -16,9 +16,10 @@ import org.xiaoyu.gitarena.git.RepoInspector;
 import org.xiaoyu.gitarena.git.SandboxManager;
 import org.xiaoyu.gitarena.git.SandboxRepo;
 import org.xiaoyu.gitarena.mapper.LevelHintMapper;
+import org.xiaoyu.gitarena.security.CommandException;
 import org.xiaoyu.gitarena.service.GoalMatcher;
 import org.xiaoyu.gitarena.service.GraphService;
-import org.xiaoyu.gitarena.service.LevelCatalog;
+import org.xiaoyu.gitarena.service.LevelSource;
 import org.xiaoyu.gitarena.service.LevelRegistry;
 import org.xiaoyu.gitarena.service.LevelService;
 import org.xiaoyu.gitarena.service.MatchResult;
@@ -32,7 +33,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class LevelServiceImpl implements LevelService {
 
-    private final LevelCatalog catalog;
+    private final LevelSource levelSource;
     private final LevelBuilder levelBuilder;
     private final SandboxManager sandboxManager;
     private final GraphService graphService;
@@ -49,7 +50,7 @@ public class LevelServiceImpl implements LevelService {
         var progressBySlug = progressService.myProgress(userId).stream()
                 .collect(java.util.stream.Collectors.toMap(p -> p.slug(), p -> p));
         List<LevelSummary> result = new ArrayList<>();
-        for (LevelFile level : catalog.list()) {
+        for (LevelFile level : levelSource.list()) {
             LevelFile.Meta m = level.meta();
             var progress = progressBySlug.get(m.slug());
             String status = progress == null ? "unlocked" : progress.status();
@@ -64,7 +65,7 @@ public class LevelServiceImpl implements LevelService {
 
     @Override
     public LevelDetail detail(String slug, Long userId) {
-        LevelFile level = catalog.get(slug);
+        LevelFile level = levelSource.get(slug);
         LevelFile.Meta m = level.meta();
         var progress = progressService.myProgress(userId).stream()
                 .filter(p -> p.slug().equals(slug))
@@ -110,7 +111,7 @@ public class LevelServiceImpl implements LevelService {
         }
         // 回退：classpath 关卡文件（与 seed 内容同源，仅兜底旧库）
         List<LevelDetail.HintView> fallback = new ArrayList<>();
-        LevelFile level = catalog.get(slug);
+        LevelFile level = levelSource.get(slug);
         if (level.hints() != null) {
             for (LevelFile.Hint h : level.hints()) {
                 fallback.add(new LevelDetail.HintView(
@@ -126,7 +127,10 @@ public class LevelServiceImpl implements LevelService {
 
     @Override
     public StartLevelResponse start(String slug) {
-        LevelFile level = catalog.get(slug);
+        LevelFile level = levelSource.get(slug);
+        if ("collab".equals(level.meta().mode())) {
+            throw new CommandException("协作关卡请在协作房间中开启（建房时选择该关卡）");
+        }
         SandboxRepo sandbox = sandboxManager.create();
         levelBuilder.build(level.initial(), sandbox);
         GitGraph graph = graphService.readGraph(sandbox);
@@ -137,7 +141,7 @@ public class LevelServiceImpl implements LevelService {
     @Override
     public ValidateResponse validate(String sessionId, String slug) {
         SandboxRepo sandbox = sandboxManager.require(sessionId);
-        LevelFile level = catalog.get(slug);
+        LevelFile level = levelSource.get(slug);
         GitGraph snapshot = graphService.readGraph(sandbox);
         MatchResult result = goalMatcher.match(
                 snapshot,
