@@ -275,6 +275,35 @@ class GraphMapperTest {
         assertThat(graph.head().ref()).isEqualTo("main");
     }
 
+    @Test
+    void checkoutToDetachedCommitKeepsOtherLiveBranchVisible() {
+        git("init");
+        commitFile("base.txt", "base", "c1");
+        git("branch", "feature");
+
+        git("checkout", "feature");
+        commitFile("feature.txt", "feature", "c2 feature");
+
+        git("checkout", "main");
+        commitFile("main.txt", "main", "c3 main");
+
+        GitGraph before = mapper.map(sandbox);
+        String mainTip = before.branches().stream()
+                .filter(branch -> "main".equals(branch.name()))
+                .map(GitGraph.BranchRef::target)
+                .findFirst()
+                .orElseThrow();
+
+        git("checkout", mainTip);
+
+        GitGraph graph = mapper.map(sandbox);
+        assertThat(graph.branches()).extracting(GitGraph.BranchRef::name)
+                .containsExactlyInAnyOrder("main", "feature");
+        assertThat(graph.commits()).hasSize(3);
+        assertThat(graph.head().type()).isEqualTo("detached");
+        assertThat(graph.head().ref()).isEqualTo(mainTip);
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private void git(String sub, String... args) {
