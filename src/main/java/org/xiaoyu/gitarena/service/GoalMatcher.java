@@ -36,9 +36,16 @@ public class GoalMatcher {
         LevelFile.GoalGraph gg = goal.graph();
 
         // ---- 索引实际快照 ----
+        // 幽灵提交（reflog 里还留着但已无引用可达）只是呈现用，不参与校验：
+        // 否则 reset/rebase/切离游离线之后，关卡会因为"多出几个提交"永远过不了（level-spec.md §5.3 规则 1）
         Map<String, GitGraph.CommitNode> actualById = new HashMap<>();
+        int reachableCount = 0;
         for (GitGraph.CommitNode c : snapshot.commits()) {
+            if (c.unreachable()) {
+                continue;
+            }
             actualById.put(c.id(), c);
+            reachableCount++;
         }
         Map<String, String> actualBranch = new HashMap<>(); // name -> target id
         for (GitGraph.BranchRef b : snapshot.branches()) {
@@ -135,9 +142,8 @@ public class GoalMatcher {
         // ---- allowExtra* ----
         if (!policy.allowExtraCommits()) {
             int goalCount = goalBySeq.size();
-            int actualCount = snapshot.commits().size();
-            if (actualCount != goalCount || idToSeq.size() != actualCount) {
-                reasons.add("提交数不符：期望 " + goalCount + " 个，实际可达 " + actualCount + " 个");
+            if (reachableCount != goalCount || idToSeq.size() != reachableCount) {
+                reasons.add("提交数不符：期望 " + goalCount + " 个，实际可达 " + reachableCount + " 个");
             }
         }
         if (!policy.allowExtraBranches()) {

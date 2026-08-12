@@ -293,7 +293,7 @@ class GoalMatcherTest {
     }
 
     private GitGraph.CommitNode node(String id, List<String> parents, String message) {
-        return new GitGraph.CommitNode(id, parents, message, "player", 0, null);
+        return new GitGraph.CommitNode(id, parents, message, "player", 0, null, false);
     }
 
     private GitGraph.BranchRef branch(String name, String target) {

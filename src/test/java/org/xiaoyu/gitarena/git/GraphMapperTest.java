@@ -204,17 +204,27 @@ class GraphMapperTest {
     }
 
     @Test
-    void movingHeadAwayDropsUnreachableDetachedCommit() {
+    void movingHeadAwayKeepsUnreachableDetachedCommitAsGhost() {
         git("init");
         commitFile("a.txt", "hello", "c1");
         String c1Id = bySeq(mapper.map(sandbox), "C1").id();
 
         git("checkout", c1Id);
         commitFile("b.txt", "detached", "on detached");
-        assertThat(mapper.map(sandbox).commits()).hasSize(2);
+        GitGraph.CommitNode detached = mapper.map(sandbox).commits().stream()
+                .filter(c -> "on detached".equals(c.message()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(detached.unreachable()).isFalse();
 
-        git("checkout", c1Id); // 离开游离提交 → 不可达，快照只含可达提交（幽灵化是前端动画的事）
-        assertThat(mapper.map(sandbox).commits()).hasSize(1);
+        git("checkout", c1Id); // 离开游离提交后，它不可达但仍应通过 reflog 作为幽灵提交呈现
+        GitGraph graph = mapper.map(sandbox);
+        assertThat(graph.commits()).hasSize(2);
+        assertThat(graph.commits().stream()
+                .filter(c -> "on detached".equals(c.message()))
+                .findFirst()
+                .orElseThrow()
+                .unreachable()).isTrue();
     }
 
     @Test
@@ -304,6 +314,39 @@ class GraphMapperTest {
         assertThat(graph.head().ref()).isEqualTo(mainTip);
     }
 
+    @Test
+    void detachedSiblingLinesStayVisibleAfterSwitchingBetweenThem() {
+        git("init");
+        commitFile("a.txt", "hello", "a");
+        commitFile("b.txt", "base", "b");
+        commitFile("c.txt", "main", "c");
+        String forkId = byMessage(mapper.map(sandbox), "b").id();
+        String mainTip = byMessage(mapper.map(sandbox), "c").id();
+
+        git("checkout", forkId);
+        commitFile("left-1.txt", "left", "left 1");
+        commitFile("left-2.txt", "left", "left 2");
+        String leftTip = mapper.map(sandbox).head().ref();
+
+        git("checkout", forkId);
+        commitFile("right-1.txt", "right", "right 1");
+        commitFile("right-2.txt", "right", "right 2");
+        String rightTip = mapper.map(sandbox).head().ref();
+
+        git("checkout", mainTip);
+        git("checkout", leftTip);
+
+        GitGraph graph = mapper.map(sandbox);
+        assertThat(graph.commits()).extracting(GitGraph.CommitNode::message)
+                .contains("a", "b", "c", "left 1", "left 2", "right 1", "right 2");
+        assertThat(byMessage(graph, "left 2").unreachable()).isFalse();
+        assertThat(byMessage(graph, "right 2").unreachable()).isTrue();
+        assertThat(graph.head().type()).isEqualTo("detached");
+        assertThat(graph.head().ref()).isEqualTo(leftTip);
+        assertThat(graph.commits()).extracting(GitGraph.CommitNode::id)
+                .contains(rightTip);
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private void git(String sub, String... args) {
@@ -331,6 +374,13 @@ class GraphMapperTest {
                 .filter(c -> seq.equals(c.seq()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("no commit with seq " + seq));
+    }
+
+    private GitGraph.CommitNode byMessage(GitGraph g, String message) {
+        return g.commits().stream()
+                .filter(c -> message.equals(c.message()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no commit with message " + message));
     }
 
     private String shortId(String fullSha) {
