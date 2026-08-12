@@ -57,7 +57,8 @@ public class SpecGraphConverter {
                     c.message() != null ? c.message() : "commit " + c.seq(),
                     c.author() != null ? c.author() : "arena",
                     BASE_EPOCH + 60L * index,
-                    c.seq()
+                    c.seq(),
+                    false // spec 图是声明出来的目标/初始形状，不存在不可达提交
             ));
             index++;
         }

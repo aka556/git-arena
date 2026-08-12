@@ -20,8 +20,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 /**
@@ -91,30 +93,38 @@ public class GraphMapper {
         }
     }
 
+    /**
+     * 读出图中全部提交。除了当前引用可达的提交，还会把 <b>reflog 里记录、但已不被任何引用可达</b>
+     * 的提交一并读出并标记 {@code unreachable}——git 并不删除它们（{@code git reflog} 能找回），
+     * 图上直接抹掉会教出错误的心智模型（§6.3）。前端据此画成幽灵节点。
+     */
     private List<GitGraph.CommitNode> readCommits(Repository repo, List<Ref> startRefs) throws IOException {
+        Set<String> reachable = new HashSet<>();
         List<RevCommit> ordered = new ArrayList<>();
+
         try (RevWalk walk = new RevWalk(repo)) {
             walk.sort(RevSort.TOPO, true);
             walk.sort(RevSort.COMMIT_TIME_DESC, true);
             for (Ref ref : startRefs) {
-                ObjectId id = ref.getObjectId();
-                if (id != null) {
-                    try {
-                        walk.markStart(walk.parseCommit(id));
-                    } catch (IOException ignore) {
-                        // 非 commit 对象（如指向 tree 的怪异 ref），跳过
-                    }
-                }
+                markStart(walk, ref.getObjectId());
             }
-            // HEAD 必须也是遍历起点：游离 HEAD 上的提交只能从 HEAD 到达，
-            // 漏掉它图上就看不见刚在游离态做的提交（所见即真实仓库状态）
-            ObjectId headId = repo.resolve(Constants.HEAD);
-            if (headId != null) {
-                try {
-                    walk.markStart(walk.parseCommit(headId));
-                } catch (IOException ignore) {
-                    // HEAD 未指向 commit（新仓库等），跳过
-                }
+            // HEAD 也是起点：游离态新提交只有 HEAD 能到达
+            markStart(walk, repo.resolve(Constants.HEAD));
+            for (RevCommit c : walk) {
+                reachable.add(c.getName());
+            }
+        }
+
+        // 第二趟：起点补上 reflog 里的不可达提交，一次遍历同时拿到可达与幽灵（含它们的共同祖先）
+        try (RevWalk walk = new RevWalk(repo)) {
+            walk.sort(RevSort.TOPO, true);
+            walk.sort(RevSort.COMMIT_TIME_DESC, true);
+            for (Ref ref : startRefs) {
+                markStart(walk, ref.getObjectId());
+            }
+            markStart(walk, repo.resolve(Constants.HEAD));
+            for (ObjectId ghost : reflogTips(repo, startRefs, reachable)) {
+                markStart(walk, ghost);
             }
             for (RevCommit c : walk) {
                 ordered.add(c);
@@ -140,10 +150,58 @@ public class GraphMapper {
                     c.getShortMessage(),
                     c.getAuthorIdent().getName(),
                     c.getCommitTime(),
-                    seqById.get(c.getName())
+                    seqById.get(c.getName()),
+                    !reachable.contains(c.getName())
             ));
         }
         return nodes;
+    }
+
+    /** RevWalk 起点，忽略 null 与非 commit 对象（如指向 tree 的怪异 ref）。 */
+    private void markStart(RevWalk walk, ObjectId id) {
+        if (id == null) {
+            return;
+        }
+        try {
+            walk.markStart(walk.parseCommit(id));
+        } catch (IOException ignore) {
+            // 非 commit 对象或对象缺失：跳过该起点
+        }
+    }
+
+    /**
+     * HEAD/引用 reflog 中出现过、但当前已不可达的提交（幽灵尖端）。它们的祖先由 RevWalk 自然带出，
+     * 因此只需返回尖端本身。reflog 缺失（裸仓库、旧仓库）时跳过。
+     */
+    private List<ObjectId> reflogTips(Repository repo, List<Ref> startRefs, Set<String> reachable) {
+        List<ObjectId> tips = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        Set<String> reflogNames = new TreeSet<>();
+        reflogNames.add(Constants.HEAD);
+        for (Ref ref : startRefs) {
+            reflogNames.add(ref.getName());
+        }
+        for (String reflogName : reflogNames) {
+            try {
+                var reader = repo.getReflogReader(reflogName);
+                if (reader == null) {
+                    continue;
+                }
+                for (var entry : reader.getReverseEntries()) {
+                    for (ObjectId candidate : List.of(entry.getNewId(), entry.getOldId())) {
+                        if (candidate != null && !ObjectId.zeroId().equals(candidate)
+                                && !reachable.contains(candidate.getName())
+                                && seen.add(candidate.getName())) {
+                            tips.add(candidate);
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                // reflog 读不出不该让整张图打不开：退化为跳过该 reflog
+                log.debug("reflog {} unavailable: {}", reflogName, e.getMessage());
+            }
+        }
+        return tips;
     }
 
     private List<GitGraph.BranchRef> readBranches(List<Ref> heads) {

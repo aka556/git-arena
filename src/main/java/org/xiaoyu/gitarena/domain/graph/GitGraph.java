@@ -20,7 +20,7 @@ public record GitGraph(
 ) {
 
     /** 当前契约版本；破坏性变更必须 +1（§5）。 */
-    public static final int CONTRACT_VERSION = 1;
+    public static final int CONTRACT_VERSION = 2;
 
     public record CommitNode(
             String id,
@@ -28,7 +28,13 @@ public record GitGraph(
             String message,
             String author,
             long timestamp,
-            String seq
+            String seq,
+            /**
+             * 是否已不被任何引用可达（reset/rebase/切离游离分支后的"孤儿"提交）。
+             * git 并不立刻删除它们（reflog 可找回），故快照如实呈现，由前端画成幽灵节点（§6.3）。
+             * <b>不参与关卡校验</b>（docs/level-spec.md §5.3）。
+             */
+            boolean unreachable
     ) {}
 
     public record BranchRef(
