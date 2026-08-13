@@ -1,6 +1,7 @@
 package org.xiaoyu.gitarena.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -10,6 +11,7 @@ import org.xiaoyu.gitarena.domain.dto.AuthDtos;
 import org.xiaoyu.gitarena.domain.entity.User;
 import org.xiaoyu.gitarena.mapper.UserMapper;
 import org.xiaoyu.gitarena.security.CommandException;
+import org.xiaoyu.gitarena.security.CurrentUser;
 import org.xiaoyu.gitarena.security.TokenStore;
 import org.xiaoyu.gitarena.service.AuthService;
 import org.xiaoyu.gitarena.service.VerificationCodeService;
@@ -47,6 +49,16 @@ public class AuthServiceImpl implements AuthService {
             }
             codeService.verify(email, req.code());
         }
+
+        // 登录态是游客 → 就地升级：复用同一 user id，游客期间攒的进度/积分/成就（都 FK 到 users.id）全部继承。
+        Long currentUserId = CurrentUser.id();
+        if (currentUserId != null) {
+            User current = userMapper.selectById(currentUserId);
+            if (current != null && Boolean.TRUE.equals(current.getIsGuest())) {
+                return upgradeGuest(current, req.username(), req.password(), email);
+            }
+        }
+
         if (findByUsername(req.username()) != null) {
             throw new CommandException("用户名已被占用");
         }
@@ -66,6 +78,35 @@ public class AuthServiceImpl implements AuthService {
         userMapper.insert(user);
 
         return issue(user);
+    }
+
+    /**
+     * 把当前游客行升级为正式账号：同一 id，仅补上凭证并翻转 is_guest，进度/积分/成就自然继承。
+     *
+     * <p>{@code expires_at} 必须显式清空——升级后不再是游客，否则会被游客过期清理误删（database.md §9）；
+     * 而 MyBatis-Plus {@code updateById} 默认跳过 null 字段，清不掉，故走 {@link LambdaUpdateWrapper} 显式 set null。
+     */
+    private AuthDtos.AuthResponse upgradeGuest(User guest, String username, String password, String email) {
+        User byName = findByUsername(username);
+        if (byName != null && !byName.getId().equals(guest.getId())) {
+            throw new CommandException("用户名已被占用");
+        }
+        if (email != null) {
+            User byEmail = findByEmail(email);
+            if (byEmail != null && !byEmail.getId().equals(guest.getId())) {
+                throw new CommandException("邮箱已被注册");
+            }
+        }
+        userMapper.update(null, new LambdaUpdateWrapper<User>()
+                .eq(User::getId, guest.getId())
+                .set(User::getUsername, username)
+                .set(User::getEmail, email)
+                .set(User::getPasswordHash, passwordEncoder.encode(password))
+                .set(User::getDisplayName, username)
+                .set(User::getIsGuest, false)
+                .set(User::getStatus, "active")
+                .set(User::getExpiresAt, null));
+        return issue(userMapper.selectById(guest.getId()));
     }
 
     @Override
