@@ -8,8 +8,11 @@ import org.xiaoyu.gitarena.domain.dto.AuthDtos;
 import org.xiaoyu.gitarena.domain.dto.LevelDetail;
 import org.xiaoyu.gitarena.domain.dto.ProgressView;
 import org.xiaoyu.gitarena.domain.entity.LevelHintEntity;
+import org.xiaoyu.gitarena.domain.entity.User;
 import org.xiaoyu.gitarena.mapper.LevelHintMapper;
+import org.xiaoyu.gitarena.mapper.UserMapper;
 import org.xiaoyu.gitarena.security.CommandException;
+import org.xiaoyu.gitarena.security.CurrentUser;
 import org.xiaoyu.gitarena.security.TokenStore;
 
 import java.util.List;
@@ -39,6 +42,8 @@ class AuthProgressIntegrationTest {
     private LevelHintMapper levelHintMapper;
     @Autowired
     private LevelService levelService;
+    @Autowired
+    private UserMapper userMapper;
 
     private static String uniqueName() {
         return "test-" + UUID.randomUUID().toString().substring(0, 8);
@@ -144,5 +149,44 @@ class AuthProgressIntegrationTest {
         assertThat(detail.hints().get(0).tier()).isEqualTo(rows.get(0).getTier());
         assertThat(detail.hints().get(0).body()).isEqualTo(rows.get(0).getBody());
         assertThat(detail.hints().get(0).costPoints()).isEqualTo(rows.get(0).getCostPoints());
+    }
+
+    @Test
+    void guest_registering_while_logged_in_upgrades_in_place_and_keeps_progress() {
+        AuthDtos.AuthResponse guest = authService.guest();
+        Long guestId = guest.user().id();
+        assertThat(guest.user().guest()).isTrue();
+        // 游客期间攒下一条通关进度
+        progressService.record(guestId, "first-commit", true);
+
+        // 模拟游客带着自己的 token 发注册请求（拦截器会把 CurrentUser 设为游客 id）
+        CurrentUser.set(guestId);
+        String username = uniqueName();
+        try {
+            AuthDtos.AuthResponse upgraded = authService.register(
+                    new AuthDtos.Register(username, "secret123", null, null));
+
+            // 同一 id 就地升级：账号变正式、用户名更新，进度原样保留
+            assertThat(upgraded.user().id()).isEqualTo(guestId);
+            assertThat(upgraded.user().guest()).isFalse();
+            assertThat(upgraded.user().username()).isEqualTo(username);
+            assertThat(progressService.myProgress(guestId))
+                    .extracting(ProgressView::slug).contains("first-commit");
+            // 升级后不再是游客：is_guest=false 且 expires_at 已清空（否则会被游客清理误删）
+            User row = userMapper.selectById(guestId);
+            assertThat(row.getIsGuest()).isFalse();
+            assertThat(row.getExpiresAt()).isNull();
+        } finally {
+            CurrentUser.clear();
+        }
+    }
+
+    @Test
+    void plain_registration_without_guest_session_creates_a_new_account() {
+        // 无登录态（CurrentUser 为空）时注册仍是全新账号，不受升级路径影响
+        String username = uniqueName();
+        AuthDtos.AuthResponse res = registerLocal(username);
+        assertThat(res.user().guest()).isFalse();
+        assertThat(res.user().username()).isEqualTo(username);
     }
 }
