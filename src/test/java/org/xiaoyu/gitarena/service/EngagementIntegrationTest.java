@@ -54,6 +54,8 @@ class EngagementIntegrationTest {
     private UserLevelProgressMapper progressMapper;
     @Autowired
     private LevelRegistry levelRegistry;
+    @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate redis;
 
     @Test
     void first_level_completion_awards_points_only_once() {
@@ -134,6 +136,8 @@ class EngagementIntegrationTest {
 
     private AuthDtos.AuthResponse register() {
         String username = "engage-" + UUID.randomUUID().toString().substring(0, 8);
-        return authService.register(new AuthDtos.Register(username, "secret123", null, null));
+        String email = username + "@test.local";
+        redis.opsForValue().set("auth:code:" + email, "123456"); // 注册唯一路径是邮箱验证
+        return authService.register(new AuthDtos.Register(username, "secret123", email, "123456"));
     }
 }

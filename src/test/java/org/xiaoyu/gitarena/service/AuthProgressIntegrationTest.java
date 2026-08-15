@@ -44,13 +44,18 @@ class AuthProgressIntegrationTest {
     private LevelService levelService;
     @Autowired
     private UserMapper userMapper;
+    @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate redis;
 
     private static String uniqueName() {
         return "test-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
+    /** 注册唯一路径是邮箱验证：预置 Redis 验证码模拟"已收到邮件"，再带码注册。 */
     private AuthDtos.AuthResponse registerLocal(String username) {
-        return authService.register(new AuthDtos.Register(username, "secret123", null, null));
+        String email = username + "@test.local";
+        redis.opsForValue().set("auth:code:" + email, "123456");
+        return authService.register(new AuthDtos.Register(username, "secret123", email, "123456"));
     }
 
     @Test
@@ -162,9 +167,11 @@ class AuthProgressIntegrationTest {
         // 模拟游客带着自己的 token 发注册请求（拦截器会把 CurrentUser 设为游客 id）
         CurrentUser.set(guestId);
         String username = uniqueName();
+        String email = username + "@test.local";
+        redis.opsForValue().set("auth:code:" + email, "654321");
         try {
             AuthDtos.AuthResponse upgraded = authService.register(
-                    new AuthDtos.Register(username, "secret123", null, null));
+                    new AuthDtos.Register(username, "secret123", email, "654321"));
 
             // 同一 id 就地升级：账号变正式、用户名更新，进度原样保留
             assertThat(upgraded.user().id()).isEqualTo(guestId);

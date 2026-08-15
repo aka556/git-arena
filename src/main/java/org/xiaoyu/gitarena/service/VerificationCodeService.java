@@ -3,8 +3,6 @@ package org.xiaoyu.gitarena.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 import org.xiaoyu.gitarena.security.CommandException;
 
@@ -12,10 +10,11 @@ import java.security.SecureRandom;
 import java.time.Duration;
 
 /**
- * 邮箱验证码（P1 注册的邮箱验证路径）。验证码存 Redis 带 5 分钟过期；通过已配 SMTP 发信。
+ * 邮箱验证码（P1 注册的邮箱验证路径）。验证码存 Redis 带 5 分钟过期，经已配 SMTP 发信。
  *
- * <p><b>Dev 兜底</b>：未配 SMTP 凭据（spring.mail.username 为空）或发信失败时，把验证码 WARN 到日志，
- * 保证无邮件服务的开发环境也能走通"两者都要"里的邮箱注册路径。生产配好凭据后即真实发信。
+ * <p><b>发送是异步的</b>：SMTP 握手可达数秒，同步发会拖住接口、诱发用户连点重复发送。
+ * 接口侧先落码并占用 60s 重发冷却（Redis setIfAbsent，防绕过前端的连点/脚本刷信），随即返回；
+ * 发信失败时清掉冷却，让用户可立即重试。未配 SMTP 凭据直接报错——不再有"验证码打日志"的开发兜底。
  */
 @Slf4j
 @Service
@@ -23,32 +22,29 @@ import java.time.Duration;
 public class VerificationCodeService {
 
     private static final String PREFIX = "auth:code:";
+    private static final String COOLDOWN_PREFIX = "auth:code-cooldown:";
     private static final Duration TTL = Duration.ofMinutes(5);
+    private static final Duration RESEND_COOLDOWN = Duration.ofSeconds(60);
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final StringRedisTemplate redis;
-    private final JavaMailSender mailSender;
+    private final MailDispatcher mailDispatcher;
     private final org.springframework.core.env.Environment env;
 
     public void sendCode(String email) {
-        String code = String.format("%06d", RANDOM.nextInt(1_000_000));
-        redis.opsForValue().set(PREFIX + email, code, TTL);
-
         String from = env.getProperty("spring.mail.username", "");
         if (from.isBlank()) {
-            log.warn("[DEV] 未配 SMTP，验证码（仅开发）：{} -> {}", email, code);
-            return;
+            throw new CommandException("邮件服务未配置，请联系管理员");
         }
-        try {
-            SimpleMailMessage msg = new SimpleMailMessage();
-            msg.setFrom(from);
-            msg.setTo(email);
-            msg.setSubject("git-arena 注册验证码");
-            msg.setText("你的验证码是 " + code + "，5 分钟内有效。");
-            mailSender.send(msg);
-        } catch (Exception e) {
-            log.warn("[DEV] 邮件发送失败（{}），验证码仅记录日志：{} -> {}", e.getMessage(), email, code);
+        String cooldownKey = COOLDOWN_PREFIX + email;
+        Boolean acquired = redis.opsForValue().setIfAbsent(cooldownKey, "1", RESEND_COOLDOWN);
+        if (!Boolean.TRUE.equals(acquired)) {
+            throw new CommandException("发送太频繁，请 1 分钟后再试");
         }
+
+        String code = String.format("%06d", RANDOM.nextInt(1_000_000));
+        redis.opsForValue().set(PREFIX + email, code, TTL);
+        mailDispatcher.sendCode(from, email, code, cooldownKey);
     }
 
     /** 校验并消费验证码（一次性）。 */

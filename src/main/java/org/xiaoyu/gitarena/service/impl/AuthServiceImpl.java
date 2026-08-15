@@ -41,14 +41,9 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthDtos.AuthResponse register(AuthDtos.Register req) {
-        String email = req.email() == null || req.email().isBlank() ? null : req.email().toLowerCase();
-        // 带验证码 → 走邮箱验证路径；否则用户名+密码直注
-        if (req.code() != null && !req.code().isBlank()) {
-            if (email == null) {
-                throw new CommandException("验证码注册需要提供邮箱");
-            }
-            codeService.verify(email, req.code());
-        }
+        // 邮箱验证是注册的唯一路径（email/code 必填由 Bean Validation 保证）
+        String email = req.email().toLowerCase();
+        codeService.verify(email, req.code());
 
         // 登录态是游客 → 就地升级：复用同一 user id，游客期间攒的进度/积分/成就（都 FK 到 users.id）全部继承。
         Long currentUserId = CurrentUser.id();
@@ -62,7 +57,7 @@ public class AuthServiceImpl implements AuthService {
         if (findByUsername(req.username()) != null) {
             throw new CommandException("用户名已被占用");
         }
-        if (email != null && findByEmail(email) != null) {
+        if (findByEmail(email) != null) {
             throw new CommandException("邮箱已被注册");
         }
 
@@ -91,11 +86,9 @@ public class AuthServiceImpl implements AuthService {
         if (byName != null && !byName.getId().equals(guest.getId())) {
             throw new CommandException("用户名已被占用");
         }
-        if (email != null) {
-            User byEmail = findByEmail(email);
-            if (byEmail != null && !byEmail.getId().equals(guest.getId())) {
-                throw new CommandException("邮箱已被注册");
-            }
+        User byEmail = findByEmail(email);
+        if (byEmail != null && !byEmail.getId().equals(guest.getId())) {
+            throw new CommandException("邮箱已被注册");
         }
         userMapper.update(null, new LambdaUpdateWrapper<User>()
                 .eq(User::getId, guest.getId())
