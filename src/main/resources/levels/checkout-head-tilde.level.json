@@ -1,0 +1,42 @@
+{
+  "specVersion": 1,
+  "meta": {
+    "slug": "checkout-head-tilde",
+    "title": "用 HEAD~ 回到上一个提交",
+    "description": "main 上有 C1 → C2 → C3。使用 HEAD~ 这个相对引用回到 C2，并观察 checkout 到具体提交后 HEAD 如何进入 detached 状态。",
+    "category": "basics",
+    "difficulty": 2,
+    "mode": "solo",
+    "orderIndex": 6
+  },
+  "initial": {
+    "commits": [
+      { "seq": "C1", "parents": [], "message": "c1", "files": { "a.txt": "1\n" } },
+      { "seq": "C2", "parents": ["C1"], "message": "c2", "files": { "a.txt": "2\n" } },
+      { "seq": "C3", "parents": ["C2"], "message": "c3", "files": { "a.txt": "3\n" } }
+    ],
+    "branches": [ { "name": "main", "target": "C3" } ],
+    "head": { "type": "branch", "ref": "main" }
+  },
+  "goal": {
+    "graph": {
+      "commits": [
+        { "seq": "C1", "parents": [] },
+        { "seq": "C2", "parents": ["C1"] },
+        { "seq": "C3", "parents": ["C2"] }
+      ],
+      "branches": [ { "name": "main", "target": "C3" } ],
+      "head": { "type": "detached", "ref": "C2" }
+    }
+  },
+  "solution": {
+    "steps": [
+      { "run": "git checkout HEAD~" }
+    ],
+    "notes": "HEAD~ 是 HEAD~1 的简写，表示沿首父回到上一个提交。checkout 到提交而不是分支后，HEAD 会变成 detached。"
+  },
+  "hints": [
+    { "tier": 1, "body": "相对引用可以从 HEAD 出发定位历史中的提交", "costPoints": 0 },
+    { "tier": 2, "body": "git checkout HEAD~ 会回到 HEAD 的上一个提交", "costPoints": 5 }
+  ]
+}
